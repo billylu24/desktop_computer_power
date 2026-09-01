@@ -54,7 +54,19 @@ dry-run, active tests, and fault-injection tests.
    refreshes `/etc/pc-power/fans.conf.example`.  An old configuration must be
    migrated to the `[cpu]`/`[lower]`/`[upper]` schema before service activation.
 
-2. Install the tested IT8689E-capable `it87` DKMS module:
+2. First try the Ubuntu kernel's in-tree `it87` module:
+
+   ```bash
+   sudo modprobe it87
+   for h in /sys/class/hwmon/hwmon*; do
+     [ "$(cat "$h/name" 2>/dev/null)" = it8689 ] && echo "$h"
+   done
+   ```
+
+   Ubuntu 26.04 kernel `7.0.0-30-generic` on the reference machine provides a
+   signed in-tree driver that detects IT8689E correctly.  Do not replace that
+   working module with an external DKMS build.  Only if the running kernel does
+   not provide a working IT8689E path, install the tested fallback:
 
    ```bash
    sudo ./install-it87.sh

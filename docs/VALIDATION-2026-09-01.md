@@ -1,8 +1,8 @@
 # Fan-control validation record — 2026-09-01
 
-This is an interim record.  Active PWM control and systemd were deliberately
-not enabled during the initial discovery.  Physical roles are now confirmed:
-PWM1 CPU cooler, PWM3 lower case airflow, and PWM6 upper case airflow.
+This record covers both the deliberately non-persistent commissioning phase
+and the final systemd activation.  Physical roles are confirmed: PWM1 CPU
+cooler, PWM3 lower case airflow, and PWM6 upper case airflow.
 
 ## Driver and electrical channel checks
 
@@ -69,7 +69,7 @@ update, algorithm unit tests are tracked by the current test suite rather than
 this historical sample count.  An unmapped configuration was also
 confirmed to reject `--write-pwm` with a nonzero exit code.
 
-## End state
+## Initial discovery end state
 
 - CPU: 88 W PPT / 75 A TDC / 150 A EDC;
 - GPU power limit: 175 W;
@@ -103,3 +103,36 @@ A five-sample real-temperature BALANCED active test produced CPU 32.5%, LOWER
 Every active test restored pwm1/pwm3/pwm6 to firmware automatic mode (`2`).
 Userspace files and the disabled mapped configuration were installed; the
 systemd service remains uninstalled/inactive pending longer load validation.
+
+## Persistent-service activation
+
+After all active-PWM and injected-failure tests passed, the mapped production
+configuration was enabled and `enable-fan-service.sh` installed and started
+`pc-fand.service`.
+
+Final checks on Ubuntu kernel `7.0.0-30-generic`:
+
+- service state: `active` and `enabled`;
+- restart test: clean stop, firmware-state restoration, and successful
+  re-acquisition;
+- live controller mode/profile: `write-pwm` / `balanced`;
+- dynamic fan hwmon: `/sys/class/hwmon/hwmon8` during this boot, device name
+  `it8689` (the numeric hwmon path is not persisted in configuration);
+- PWM1 / CPU: raw 82, 32.2%, 736 RPM, `pwm1_enable=1`;
+- PWM3 / LOWER: raw 90, 35.3%, 812 RPM, `pwm3_enable=1`;
+- PWM6 / UPPER: raw 90, 35.3%, 799 RPM, `pwm6_enable=1`;
+- all four temperature sources readable; `warnings=[]`;
+- no new MCE, hardware error, SMU timeout, or PCI error.  The kernel message
+  `MCE: In-kernel MCE decoding enabled` is an initialization notice, not a
+  reported machine-check event.
+
+The running `it87` module is the signed, in-tree Ubuntu module at
+`/lib/modules/7.0.0-30-generic/kernel/drivers/hwmon/it87.ko.zst`.  It detects
+the IT8689E correctly, so an external `it87` DKMS module was intentionally not
+installed on this kernel.  `ryzen_smu/0.1.7` remains installed through DKMS.
+
+Boot behavior is intentionally limited to cooling control.  With no volatile
+fan-profile file, the fan daemon starts on BALANCED.  It does not change CPU
+PBO limits, the NVIDIA power limit, or the Linux power profile.  Consequently
+the verified post-activation combination was CPU/GPU/Linux SILENT plus fan
+BALANCED, correctly reported by `pc-power status` as `CUSTOM`.
