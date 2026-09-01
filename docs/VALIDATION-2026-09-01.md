@@ -136,3 +136,20 @@ fan-profile file, the fan daemon starts on BALANCED.  It does not change CPU
 PBO limits, the NVIDIA power limit, or the Linux power profile.  Consequently
 the verified post-activation combination was CPU/GPU/Linux SILENT plus fan
 BALANCED, correctly reported by `pc-power status` as `CUSTOM`.
+
+## Persistent GPU reader update
+
+The controller sampling interval was subsequently changed from two seconds to
+one second.  Instead of invoking `gputemps --json --once` for every sample,
+`pc-fand` now owns one long-lived `gputemps --json --refresh-ms 1000` process
+and reads its newline-delimited JSON stream with a 1.5-second deadline.  Stream
+timeout, invalid JSON, or child exit closes the reader, invokes the existing
+GPU sensor fail-safe for that sample, and causes an automatic restart on the
+next sample.  Controlled daemon shutdown explicitly terminates the child.
+
+Four consecutive real-hardware samples were recorded at one-second timestamps
+with the same child PID and `starts=1`.  A controlled `SIGTERM` of that exact
+temperature-reader child left `pc-fand.service` active; the next cycle started
+a new reader PID, reported `starts=2`, retained nonzero RPM on every fan zone,
+and had no warnings.  Process inspection confirmed exactly one `gputemps`
+instance after recovery.

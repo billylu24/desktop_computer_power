@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 
@@ -255,6 +256,74 @@ names=UPPER_FAN
             self.assertEqual(next(row["pwm_raw"] for row in rows if row["role"] == "lower"), 255)
             self.assertLess(next(row["pwm_raw"] for row in rows if row["role"] == "upper"), 255)
             controller.restore()
+
+
+class GpuTempStreamTests(unittest.TestCase):
+    def make_executable(self, directory, body):
+        path = Path(directory) / "fake-gputemps"
+        path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    def test_reuses_one_process_for_multiple_samples(self):
+        body = """import json, time
+count = 0
+while True:
+    print(json.dumps({"gpus": [{"core": 40 + count, "junction": 50, "vram": 60}]}), flush=True)
+    count += 1
+    time.sleep(0.05)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            command = self.make_executable(directory, body)
+            reader = pc_fand.GpuTempStream(command, refresh_seconds=0.05, timeout_seconds=0.5)
+            try:
+                first, first_error = reader.read()
+                first_pid = reader.pid
+                second, second_error = reader.read()
+                self.assertIsNone(first_error)
+                self.assertIsNone(second_error)
+                self.assertEqual(first["gpu_core"], 40)
+                self.assertEqual(second["gpu_core"], 41)
+                self.assertEqual(reader.pid, first_pid)
+                self.assertEqual(reader.starts, 1)
+            finally:
+                reader.close()
+            self.assertIsNone(reader.pid)
+
+    def test_timeout_closes_child_and_next_read_restarts_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command = self.make_executable(directory, "import time\ntime.sleep(10)\n")
+            reader = pc_fand.GpuTempStream(command, refresh_seconds=1, timeout_seconds=0.05)
+            try:
+                first, first_error = reader.read()
+                self.assertTrue(all(value is None for value in first.values()))
+                self.assertIn("no JSON sample", first_error)
+                self.assertIsNone(reader.pid)
+                second, second_error = reader.read()
+                self.assertTrue(all(value is None for value in second.values()))
+                self.assertIn("no JSON sample", second_error)
+                self.assertEqual(reader.starts, 2)
+            finally:
+                reader.close()
+
+    def test_burst_uses_freshest_complete_sample(self):
+        body = """import json, time
+for core in (40, 41, 42):
+    print(json.dumps({"gpus": [{"core": core, "junction": 50, "vram": 60}]}), flush=True)
+time.sleep(10)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            command = self.make_executable(directory, body)
+            reader = pc_fand.GpuTempStream(command, refresh_seconds=1, timeout_seconds=0.5)
+            try:
+                reader._start()
+                time.sleep(0.05)
+                values, error = reader.read()
+                self.assertIsNone(error)
+                self.assertEqual(values["gpu_core"], 42)
+                self.assertEqual(reader.starts, 1)
+            finally:
+                reader.close()
 
 
 if __name__ == "__main__":

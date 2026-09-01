@@ -93,11 +93,17 @@ CPU/GPU/Linux profile at boot.
 
 ## Fan controller
 
-`pc-fand.py` reads every two seconds:
+`pc-fand.py` reads every second:
 
 - CPU `Tctl` directly from the dynamically located `k10temp` hwmon device;
 - GPU core, junction, and VRAM temperatures from the JSON output of the tested
   Blackwell MMIO `gputemps` reader.
+
+The daemon keeps one persistent `gputemps --json --refresh-ms 1000` child
+process and consumes its line-delimited output.  It does not fork one reader
+per sample.  A missing line for 1.5 seconds, malformed JSON, or an exited child
+activates the existing GPU sensor fail-safe for that sample; the reader is
+restarted automatically on the next cycle.
 
 Each sensor has its own linear-interpolation curve.  LOWER fan demand is the
 maximum of the three normalized GPU cooling demands.  UPPER fan demand is the

@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import re
+import select
 import signal
 import statistics
 import subprocess
@@ -114,32 +115,99 @@ def find_cpu_tctl() -> tuple[float | None, str | None]:
     return None, None
 
 
-def read_gpu_temps(command: Path) -> tuple[dict[str, float | None], str | None]:
+def parse_gpu_temps(payload_text: str) -> dict[str, float | None]:
     values = {"gpu_core": None, "gpu_junction": None, "gpu_vram": None}
-    try:
-        completed = subprocess.run(
-            [str(command), "--json", "--once"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=1.5,
+    payload = json.loads(payload_text)
+    gpu = payload["gpus"][0]
+    for output_name, input_name in (
+        ("gpu_core", "core"),
+        ("gpu_junction", "junction"),
+        ("gpu_vram", "vram"),
+    ):
+        raw = gpu.get(input_name)
+        if raw is None:
+            continue
+        value = float(raw)
+        if 0 <= value <= 130:
+            values[output_name] = value
+    return values
+
+
+class GpuTempStream:
+    """Keep one gputemps process and consume its line-delimited JSON stream."""
+
+    def __init__(self, command: Path, refresh_seconds: float, timeout_seconds: float = 1.5) -> None:
+        self.command = command
+        self.refresh_ms = max(50, round(refresh_seconds * 1000))
+        self.timeout_seconds = timeout_seconds
+        self.process: subprocess.Popen[bytes] | None = None
+        self.buffer = b""
+        self.starts = 0
+
+    @property
+    def pid(self) -> int | None:
+        return None if self.process is None else self.process.pid
+
+    def _start(self) -> None:
+        self.close()
+        self.process = subprocess.Popen(
+            [str(self.command), "--json", "--refresh-ms", str(self.refresh_ms)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
         )
-        payload = json.loads(completed.stdout)
-        gpu = payload["gpus"][0]
-        for output_name, input_name in (
-            ("gpu_core", "core"),
-            ("gpu_junction", "junction"),
-            ("gpu_vram", "vram"),
-        ):
-            raw = gpu.get(input_name)
-            if raw is None:
-                continue
-            value = float(raw)
-            if 0 <= value <= 130:
-                values[output_name] = value
-        return values, None
-    except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError, json.JSONDecodeError) as exc:
-        return values, str(exc)
+        self.buffer = b""
+        self.starts += 1
+
+    def _readline(self) -> str:
+        assert self.process is not None and self.process.stdout is not None
+        deadline = time.monotonic() + self.timeout_seconds
+        while True:
+            if b"\n" in self.buffer:
+                parts = self.buffer.split(b"\n")
+                self.buffer = parts[-1]
+                complete = [line for line in parts[:-1] if line.strip()]
+                if complete:
+                    # If pc-fand was briefly delayed, discard stale complete
+                    # samples and act on the freshest line already available.
+                    return complete[-1].decode("utf-8")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"no JSON sample within {self.timeout_seconds:g}s")
+            ready, _, _ = select.select([self.process.stdout], [], [], remaining)
+            if not ready:
+                raise TimeoutError(f"no JSON sample within {self.timeout_seconds:g}s")
+            chunk = os.read(self.process.stdout.fileno(), 65536)
+            if not chunk:
+                code = self.process.poll()
+                raise RuntimeError(f"stream closed (exit code {code})")
+            self.buffer += chunk
+
+    def read(self) -> tuple[dict[str, float | None], str | None]:
+        empty = {"gpu_core": None, "gpu_junction": None, "gpu_vram": None}
+        try:
+            if self.process is None or self.process.poll() is not None:
+                self._start()
+            assert self.process is not None and self.process.stdout is not None
+            return parse_gpu_temps(self._readline()), None
+        except (OSError, ValueError, KeyError, IndexError, json.JSONDecodeError, TimeoutError, RuntimeError) as exc:
+            self.close()
+            return empty, str(exc)
+
+    def close(self) -> None:
+        process = self.process
+        self.process = None
+        if process is None:
+            return
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.5)
+        if process.stdout is not None:
+            process.stdout.close()
 
 
 def interpolate(points: list[list[float]], temperature: float) -> float:
@@ -453,6 +521,9 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="pc-fand: %(levelname)s: %(message)s")
     profiles_data = json.loads(args.profiles.read_text(encoding="utf-8"))
     validate_profiles(profiles_data)
+    sample_interval = float(profiles_data["sample_interval_seconds"])
+    if sample_interval <= 0:
+        raise ConfigurationError("sample_interval_seconds must be positive")
     fan_config, channels = parse_fans(args.config, allow_unmapped=args.dry_run)
     hardware_enabled = fan_config.getboolean("controller", "enabled", fallback=False)
     cpu_floor = fan_config.getint("controller", "cpu_fan_min_percent", fallback=30)
@@ -470,6 +541,7 @@ def main() -> int:
     if args.write_pwm and fan_hwmon is None:
         raise ConfigurationError(f"hwmon controller {hwmon_name!r} not found")
     controller = PwmController(fan_hwmon, channels) if fan_hwmon else None
+    gpu_reader = GpuTempStream(args.gputemps, sample_interval)
     if args.write_pwm:
         assert controller is not None
         controller.take_control()
@@ -490,7 +562,7 @@ def main() -> int:
         while not stop:
             started = time.monotonic()
             cpu, cpu_path = find_cpu_tctl()
-            gpu, gpu_error = read_gpu_temps(args.gputemps)
+            gpu, gpu_error = gpu_reader.read()
             raw = {"cpu_tctl": cpu, **gpu}
             raw.update(injections)
             filtered = filters.update(raw)
@@ -538,6 +610,12 @@ def main() -> int:
                 "warnings": warnings + ([f"gputemps: {gpu_error}"] if gpu_error else []),
                 "cpu_tctl_path": cpu_path,
                 "fan_hwmon": str(fan_hwmon) if fan_hwmon else None,
+                "gpu_reader": {
+                    "mode": "persistent",
+                    "pid": gpu_reader.pid,
+                    "refresh_ms": gpu_reader.refresh_ms,
+                    "starts": gpu_reader.starts,
+                },
                 "fans": fan_rows,
             }
             if not args.no_status_file:
@@ -548,10 +626,11 @@ def main() -> int:
             count += 1
             if args.once or (args.samples is not None and count >= args.samples):
                 break
-            remaining = float(profiles_data["sample_interval_seconds"]) - (time.monotonic() - started)
+            remaining = sample_interval - (time.monotonic() - started)
             if remaining > 0:
                 time.sleep(remaining)
     finally:
+        gpu_reader.close()
         if controller:
             controller.restore()
     return 0

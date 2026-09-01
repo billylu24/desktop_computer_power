@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "sample_interval_seconds": 2,
+  "sample_interval_seconds": 1,
   "filter": {
     "median_samples": 5,
     "ema_alpha": 0.5,
