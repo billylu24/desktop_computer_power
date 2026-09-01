@@ -3,22 +3,27 @@
 # hwmon number here because numbering changes across boots.
 hwmon_name = it8689
 cpu_fan_min_percent = 30
-sys_fan_min_percent = 35
+lower_fan_min_percent = 35
+upper_fan_min_percent = 35
 
-# Keep false until the CPU/SYS header groups are physically identified.
-# --dry-run works with an unmapped/disabled configuration.
+# Mapping is confirmed, but keep false until supervised active-PWM testing
+# passes.  --dry-run never writes these channels.
 enabled = false
 
 [cpu]
-# Comma-separated, positionally paired lists.  CPU_FAN + CPU_OPT can both be
-# listed here when they are independently writable.
-pwm_paths = UNMAPPED
-fan_inputs = UNMAPPED
+# Confirmed physical mapping on the reference machine.
+pwm_paths = pwm1
+fan_inputs = fan1_input
 names = CPU_FAN
 
-[sys]
-# Every listed SYS header receives exactly the same target percentage.
-pwm_paths = UNMAPPED
-fan_inputs = UNMAPPED
-# Optional; leave empty to generate SYS_FAN_1, SYS_FAN_2, ... automatically.
-names =
+[lower]
+# Lower intake is GPU-led: max(Core, Junction, VRAM demand).
+pwm_paths = pwm3
+fan_inputs = fan3_input
+names = LOWER_FAN
+
+[upper]
+# Upper airflow exhausts both CPU and GPU heat.
+pwm_paths = pwm6
+fan_inputs = fan6_input
+names = UPPER_FAN

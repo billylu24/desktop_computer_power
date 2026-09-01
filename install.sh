@@ -63,12 +63,12 @@ install -m 0644 "$ROOT_DIR/config/fan-profiles.json" /etc/pc-power/fan-profiles.
 install -m 0644 "$ROOT_DIR/config/fans.conf.example" /etc/pc-power/fans.conf.example
 if [[ ! -e /etc/pc-power/fans.conf ]]; then
   install -m 0644 "$ROOT_DIR/config/fans.conf.example" /etc/pc-power/fans.conf
-elif ! grep -q '^\[sys\]$' /etc/pc-power/fans.conf; then
-  printf '%s\n' 'WARNING: existing fans.conf uses the old per-fan schema.' >&2
+elif ! grep -q '^\[lower\]$' /etc/pc-power/fans.conf || ! grep -q '^\[upper\]$' /etc/pc-power/fans.conf; then
+  printf '%s\n' 'WARNING: existing fans.conf uses an older fan-zone schema.' >&2
   printf '%s\n' 'Migrate it using /etc/pc-power/fans.conf.example before enabling pc-fand.' >&2
 fi
 install -m 0644 "$ROOT_DIR/systemd/pc-fand.service" /usr/local/share/desktop-computer-power/pc-fand.service
 
 printf '%s\n' 'Installed userspace files. Fan writes and pc-fand.service remain disabled.'
 printf '%s\n' 'Load the CPU module when needed: sudo modprobe ryzen_smu'
-printf '%s\n' 'Complete CPU/SYS fan mapping and active testing before enable-fan-service.sh.'
+printf '%s\n' 'Complete three-zone active fan testing before enable-fan-service.sh.'

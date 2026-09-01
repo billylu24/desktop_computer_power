@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Final activation step. Run only after CPU/SYS mapping and active PWM tests.
+# Final activation step. Run only after three-zone mapping and active PWM tests.
 set -euo pipefail
 
 readonly FANS_CONF=/etc/pc-power/fans.conf
@@ -12,7 +12,7 @@ die() { printf 'enable-fan-service.sh: %s\n' "$*" >&2; exit 1; }
 [[ -r $FANS_CONF ]] || die "missing $FANS_CONF"
 [[ -r $UNIT_SOURCE ]] || die "missing $UNIT_SOURCE; run install.sh first"
 grep -Eq '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$FANS_CONF" ||
-  die 'fans.conf is not enabled; CPU/SYS mapping must be completed first'
+  die 'fans.conf is not enabled; three-zone active testing must be completed first'
 
 modprobe it87
 "$FAND" --dry-run --once >/dev/null || die 'final dry-run failed'

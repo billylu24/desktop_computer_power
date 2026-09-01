@@ -38,44 +38,44 @@ class FanAlgorithmTests(unittest.TestCase):
         self.assertAlmostEqual(pc_fand.interpolate(points, 60), 40)
         self.assertEqual(pc_fand.interpolate(points, 90), 50)
 
-    def test_partial_gpu_failure_uses_50_percent_sys_floor(self):
+    def test_partial_gpu_failure_uses_50_percent_airflow_floors(self):
         values = {
             "cpu_tctl": 50,
             "gpu_core": 50,
             "gpu_junction": None,
             "gpu_vram": None,
         }
-        cpu, case, _, _, warnings = self.calculate(values)
+        cpu, lower, upper, _, _, warnings = self.calculate(values)
         self.assertLess(cpu, 50)
-        self.assertEqual(case, 50)
+        self.assertEqual((lower, upper), (50, 50))
         self.assertTrue(any("50%" in warning for warning in warnings))
 
-    def test_all_gpu_failure_uses_70_percent_sys_floor(self):
+    def test_all_gpu_failure_uses_70_percent_airflow_floors(self):
         values = {
             "cpu_tctl": 50,
             "gpu_core": None,
             "gpu_junction": None,
             "gpu_vram": None,
         }
-        cpu, case, _, _, _ = self.calculate(values)
-        self.assertEqual(case, 70)
+        cpu, lower, upper, _, _, _ = self.calculate(values)
+        self.assertEqual((lower, upper), (70, 70))
         self.assertLess(cpu, 100)
 
-    def test_cpu_failure_uses_cpu_100_and_sys_70(self):
+    def test_cpu_failure_uses_cpu_100_and_airflow_70(self):
         values = {
             "cpu_tctl": None,
             "gpu_core": 50,
             "gpu_junction": 50,
             "gpu_vram": 50,
         }
-        cpu, case, _, _, _ = self.calculate(values)
+        cpu, lower, upper, _, _, _ = self.calculate(values)
         self.assertEqual(cpu, 100)
-        self.assertEqual(case, 70)
+        self.assertEqual((lower, upper), (70, 70))
 
     def test_all_failure_uses_all_fans_100(self):
         values = {sensor: None for sensor in pc_fand.SENSORS}
-        cpu, case, _, _, _ = self.calculate(values)
-        self.assertEqual((cpu, case), (100, 100))
+        cpu, lower, upper, _, _, _ = self.calculate(values)
+        self.assertEqual((cpu, lower, upper), (100, 100, 100))
 
     def test_emergency_bypasses_filter(self):
         raw = {
@@ -85,16 +85,16 @@ class FanAlgorithmTests(unittest.TestCase):
             "gpu_vram": 40,
         }
         filtered = dict(raw, gpu_junction=50)
-        cpu, case, until, _, _ = pc_fand.demands_for(
+        cpu, lower, upper, until, _, _ = pc_fand.demands_for(
             raw, filtered, self.profile, self.emergency, 0, 100,
         )
-        self.assertEqual((cpu, case), (100, 100))
+        self.assertEqual((cpu, lower, upper), (100, 100, 100))
         self.assertEqual(until, 130)
 
     def test_emergency_hold_remains_active(self):
         values = {sensor: 40 for sensor in pc_fand.SENSORS}
-        cpu, case, until, _, _ = self.calculate(values, now=110, emergency_until=120)
-        self.assertEqual((cpu, case), (100, 100))
+        cpu, lower, upper, until, _, _ = self.calculate(values, now=110, emergency_until=120)
+        self.assertEqual((cpu, lower, upper), (100, 100, 100))
         self.assertEqual(until, 120)
 
     def test_slew_rises_fast_and_falls_slow(self):
@@ -108,30 +108,49 @@ class FanAlgorithmTests(unittest.TestCase):
             "gpu_junction": 74,
             "gpu_vram": 71,
         }
-        cpu, _, _, _, _ = self.calculate(base)
+        cpu, _, _, _, _, _ = self.calculate(base)
         self.assertEqual(cpu, 20)
-        cpu, _, _, _, _ = self.calculate(dict(base, gpu_junction=75))
+        cpu, _, _, _, _, _ = self.calculate(dict(base, gpu_junction=75))
         self.assertEqual(cpu, 35)
-        cpu, _, _, _, _ = self.calculate(dict(base, gpu_junction=85))
+        cpu, _, _, _, _, _ = self.calculate(dict(base, gpu_junction=85))
         self.assertEqual(cpu, 45)
-        cpu, _, _, _, _ = self.calculate(dict(base, gpu_vram=86))
+        cpu, _, _, _, _, _ = self.calculate(dict(base, gpu_vram=86))
         self.assertEqual(cpu, 60)
 
+    def test_lower_is_gpu_led_and_upper_exhausts_cpu_and_gpu(self):
+        values = {
+            "cpu_tctl": 70,
+            "gpu_core": 50,
+            "gpu_junction": 50,
+            "gpu_vram": 50,
+        }
+        _, lower, upper, _, _, _ = self.calculate(values)
+        self.assertEqual(lower, 30)
+        self.assertEqual(upper, 70)
+        values["gpu_junction"] = 80
+        _, lower, upper, _, _, _ = self.calculate(values)
+        self.assertEqual((lower, upper), (100, 100))
+
     def test_global_group_floors(self):
-        self.assertEqual(pc_fand.apply_group_floors(20, 25, 30, 35), (30, 35))
-        self.assertEqual(pc_fand.apply_group_floors(50, 60, 30, 35), (50, 60))
+        self.assertEqual(pc_fand.apply_group_floors(20, 25, 25, 30, 35, 35), (30, 35, 35))
+        self.assertEqual(pc_fand.apply_group_floors(50, 60, 70, 30, 35, 35), (50, 60, 70))
 
     def test_disabled_unmapped_config_is_allowed_for_dry_run(self):
         text = """[controller]
 enabled=false
 cpu_fan_min_percent=30
-sys_fan_min_percent=35
+lower_fan_min_percent=35
+upper_fan_min_percent=35
 
 [cpu]
 pwm_paths=UNMAPPED
 fan_inputs=UNMAPPED
 
-[sys]
+[lower]
+pwm_paths=UNMAPPED
+fan_inputs=UNMAPPED
+
+[upper]
 pwm_paths=UNMAPPED
 fan_inputs=UNMAPPED
 """
@@ -145,13 +164,18 @@ fan_inputs=UNMAPPED
         text = """[controller]
 enabled=true
 cpu_fan_min_percent=30
-sys_fan_min_percent=35
+lower_fan_min_percent=35
+upper_fan_min_percent=35
 
 [cpu]
 pwm_paths=UNMAPPED
 fan_inputs=UNMAPPED
 
-[sys]
+[lower]
+pwm_paths=UNMAPPED
+fan_inputs=UNMAPPED
+
+[upper]
 pwm_paths=UNMAPPED
 fan_inputs=UNMAPPED
 """
@@ -161,34 +185,40 @@ fan_inputs=UNMAPPED
             with self.assertRaises(pc_fand.ConfigurationError):
                 pc_fand.parse_fans(path, allow_unmapped=True)
 
-    def test_two_zone_mapping_supports_multiple_headers(self):
+    def test_three_zone_mapping_uses_confirmed_headers(self):
         text = """[controller]
 enabled=true
 cpu_fan_min_percent=30
-sys_fan_min_percent=35
+lower_fan_min_percent=35
+upper_fan_min_percent=35
 
 [cpu]
 pwm_paths=pwm1
 fan_inputs=fan1_input
 names=CPU_FAN
 
-[sys]
-pwm_paths=pwm3,pwm6
-fan_inputs=fan3_input,fan6_input
-names=SYS_A,SYS_B
+[lower]
+pwm_paths=pwm3
+fan_inputs=fan3_input
+names=LOWER_FAN
+
+[upper]
+pwm_paths=pwm6
+fan_inputs=fan6_input
+names=UPPER_FAN
 """
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fans.conf"
             path.write_text(text, encoding="utf-8")
             _, channels = pc_fand.parse_fans(path, allow_unmapped=False)
-        self.assertEqual([channel["role"] for channel in channels], ["cpu", "sys", "sys"])
+        self.assertEqual([channel["role"] for channel in channels], ["cpu", "lower", "upper"])
         self.assertEqual([channel["minimum_percent"] for channel in channels], [30, 35, 35])
 
-    def test_all_sys_headers_receive_identical_pwm(self):
+    def test_three_zones_receive_independent_pwm(self):
         channels = [
             {"name": "CPU_FAN", "role": "cpu", "pwm": "pwm1", "fan_input": "fan1_input", "minimum_percent": 30},
-            {"name": "SYS_A", "role": "sys", "pwm": "pwm3", "fan_input": "fan3_input", "minimum_percent": 35},
-            {"name": "SYS_B", "role": "sys", "pwm": "pwm6", "fan_input": "fan6_input", "minimum_percent": 35},
+            {"name": "LOWER_FAN", "role": "lower", "pwm": "pwm3", "fan_input": "fan3_input", "minimum_percent": 35},
+            {"name": "UPPER_FAN", "role": "upper", "pwm": "pwm6", "fan_input": "fan6_input", "minimum_percent": 35},
         ]
         with tempfile.TemporaryDirectory() as directory:
             hwmon = Path(directory)
@@ -198,19 +228,19 @@ names=SYS_A,SYS_B
                 (hwmon / f"fan{number}_input").write_text(str(rpm), encoding="ascii")
             controller = pc_fand.PwmController(hwmon, channels)
             controller.take_control()
-            rows, warnings = controller.write_targets(30, 55)
+            rows, warnings = controller.write_targets(30, 55, 65)
             self.assertFalse(warnings)
-            expected = pc_fand.math.ceil(55 * 255 / 100)
-            self.assertEqual(int((hwmon / "pwm3").read_text()), expected)
-            self.assertEqual(int((hwmon / "pwm6").read_text()), expected)
-            self.assertEqual({row["pwm_raw"] for row in rows if row["role"] == "sys"}, {expected})
+            self.assertEqual(int((hwmon / "pwm1").read_text()), pc_fand.math.ceil(30 * 255 / 100))
+            self.assertEqual(int((hwmon / "pwm3").read_text()), pc_fand.math.ceil(55 * 255 / 100))
+            self.assertEqual(int((hwmon / "pwm6").read_text()), pc_fand.math.ceil(65 * 255 / 100))
+            self.assertEqual({row["role"] for row in rows}, {"cpu", "lower", "upper"})
             controller.restore()
 
-    def test_one_stalled_sys_tach_forces_entire_sys_group_to_full(self):
+    def test_stalled_lower_tach_forces_only_lower_zone_to_full(self):
         channels = [
             {"name": "CPU_FAN", "role": "cpu", "pwm": "pwm1", "fan_input": "fan1_input", "minimum_percent": 30},
-            {"name": "SYS_A", "role": "sys", "pwm": "pwm3", "fan_input": "fan3_input", "minimum_percent": 35},
-            {"name": "SYS_B", "role": "sys", "pwm": "pwm6", "fan_input": "fan6_input", "minimum_percent": 35},
+            {"name": "LOWER_FAN", "role": "lower", "pwm": "pwm3", "fan_input": "fan3_input", "minimum_percent": 35},
+            {"name": "UPPER_FAN", "role": "upper", "pwm": "pwm6", "fan_input": "fan6_input", "minimum_percent": 35},
         ]
         with tempfile.TemporaryDirectory() as directory:
             hwmon = Path(directory)
@@ -220,9 +250,10 @@ names=SYS_A,SYS_B
                 (hwmon / f"fan{number}_input").write_text(str(rpm), encoding="ascii")
             controller = pc_fand.PwmController(hwmon, channels)
             controller.take_control()
-            rows, warnings = controller.write_targets(30, 35)
-            self.assertTrue(any("SYS" in warning for warning in warnings))
-            self.assertEqual({row["pwm_raw"] for row in rows if row["role"] == "sys"}, {255})
+            rows, warnings = controller.write_targets(30, 35, 35)
+            self.assertTrue(any("LOWER" in warning for warning in warnings))
+            self.assertEqual(next(row["pwm_raw"] for row in rows if row["role"] == "lower"), 255)
+            self.assertLess(next(row["pwm_raw"] for row in rows if row["role"] == "upper"), 255)
             controller.restore()
 
 

@@ -1,8 +1,7 @@
 # Fan commissioning procedure
 
 This procedure is required once per physical fan/header topology.  The final
-controller has only two outputs: a CPU group and a SYS group.  Every header in
-one group receives the same percentage.
+controller has three outputs: CPU cooler, lower airflow, and upper airflow.
 
 ## Reference-system discovery record
 
@@ -26,9 +25,13 @@ automatic mode after every test:
 | pwm3 | fan3_input | 832 | 1548 |
 | pwm6 | fan6_input | 969 | 1516 |
 
-The physical CPU/front/rear/top roles cannot be derived safely from those
-register numbers.  They must be observed at the case before commissioning can
-continue.
+Supervised visual tests subsequently confirmed:
+
+| Zone | PWM | Tach |
+| --- | --- | --- |
+| CPU cooler | pwm1 | fan1_input |
+| Lower case fans | pwm3 | fan3_input |
+| Upper case fans | pwm6 | fan6_input |
 
 ## Required order
 
@@ -38,19 +41,19 @@ continue.
 4. Immediately restore that channel to its saved PWM and enable mode.
 5. Record splitters: one header may power several physical case fans while only
    one tach signal is reported.
-6. Classify each connected channel only as `CPU_FAN` or `SYS_FAN`.  CPU_FAN and
-   CPU_OPT may both be placed in the CPU group.  All case headers go in SYS.
+6. Classify each connected channel as `CPU_FAN`, `LOWER_FAN`, or `UPPER_FAN`.
 7. Populate the comma-separated `pwm_paths`, `fan_inputs`, and optional `names`
    lists in `/etc/pc-power/fans.conf`; keep `enabled=false` during dry-run.
-   The global floors are CPU 30% and SYS 35%.  Do not configure Fan Stop.
+   The global floors are CPU 30%, LOWER 35%, and UPPER 35%.  Do not configure
+   Fan Stop.
 8. Run at least five idle minutes plus short CPU-only and GPU-only loads with
    `pc-fand.py --dry-run`.  Confirm demand responds to the correct heat source.
 9. Test the injected sensor-failure modes without damaging or unloading real
     sensors.
 10. Perform a supervised active BALANCED PWM test.  Confirm every RPM remains
     nonzero and that exiting restores `pwmN_enable=2`.
-11. If any SYS fan cannot sustain 35%, raise the single global
-    `sys_fan_min_percent` for the whole group (for example to 40%).
+11. If a case zone cannot sustain 35%, raise that zone's global minimum for all
+    fans attached to its header.
 12. Only then set `enabled=true` and use `enable-fan-service.sh`.
 
 ## Failure injection examples (dry-run only)
@@ -66,5 +69,5 @@ sudo /usr/local/libexec/pc-fand.py --dry-run --once --profile balanced \
   --inject cpu_tctl=null,gpu_core=null,gpu_junction=null,gpu_vram=null
 ```
 
-Expected targets are respectively: SYS at least 50%; CPU 100% and SYS at
-least 70%; all controlled fans 100%.
+Expected targets are respectively: LOWER/UPPER at least 50%; CPU 100% and both
+airflow zones at least 70%; all controlled fans 100%.

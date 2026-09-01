@@ -108,9 +108,13 @@ print("CPU FAN:")
 print(f"  Demand: {d.get('cpu_fan_target_percent', '?')}%")
 for fan in (fan for fan in d.get("fans", []) if fan.get("role") == "cpu"):
     print(f"  {fan.get('name', '?')}: PWM {fan.get('pwm_percent', '?')}%, RPM {fan.get('rpm', '?')}")
-print("SYS FAN:")
-print(f"  Demand: {d.get('sys_fan_target_percent', '?')}%")
-for fan in (fan for fan in d.get("fans", []) if fan.get("role") == "sys"):
+print("LOWER FAN:")
+print(f"  Demand: {d.get('lower_fan_target_percent', '?')}%")
+for fan in (fan for fan in d.get("fans", []) if fan.get("role") == "lower"):
+    print(f"  {fan.get('name', '?')}: PWM {fan.get('pwm_percent', '?')}%, RPM {fan.get('rpm', '?')}")
+print("UPPER FAN:")
+print(f"  Demand: {d.get('upper_fan_target_percent', '?')}%")
+for fan in (fan for fan in d.get("fans", []) if fan.get("role") == "upper"):
     print(f"  {fan.get('name', '?')}: PWM {fan.get('pwm_percent', '?')}%, RPM {fan.get('rpm', '?')}")
 warnings = d.get("warnings", [])
 if warnings:

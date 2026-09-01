@@ -35,7 +35,7 @@ profile, and active fan profile.  Any mismatch is reported as `CUSTOM`.
 
 ## Staged installation
 
-Fan commissioning is intentionally staged.  Do not skip CPU/SYS group mapping,
+Fan commissioning is intentionally staged.  Do not skip CPU/LOWER/UPPER mapping,
 dry-run, active tests, and fault-injection tests.
 
 1. Install CPU control, the GPU temperature reader, configuration templates,
@@ -51,8 +51,8 @@ dry-run, active tests, and fault-injection tests.
    rather than performing a partial CPU/GPU/Linux switch.
 
    On upgrades, the installer preserves an existing `fans.conf` and always
-   refreshes `/etc/pc-power/fans.conf.example`.  An old per-fan configuration
-   must be migrated to the `[cpu]`/`[sys]` schema before service activation.
+   refreshes `/etc/pc-power/fans.conf.example`.  An old configuration must be
+   migrated to the `[cpu]`/`[lower]`/`[upper]` schema before service activation.
 
 2. Install the tested IT8689E-capable `it87` DKMS module:
 
@@ -87,18 +87,26 @@ CPU/GPU/Linux profile at boot.
 - GPU core, junction, and VRAM temperatures from the JSON output of the tested
   Blackwell MMIO `gputemps` reader.
 
-Each sensor has its own linear-interpolation curve.  SYS fan demand is the
-maximum of the four normalized cooling demands, and every SYS header receives
-that same percentage.  CPU fan demand is primarily the CPU curve plus the
-specified 35/45/60% GPU airflow floors.  CPU and SYS global minimums are 30%
-and 35%; there is no per-fan curve or per-fan minimum calibration.  A
+Each sensor has its own linear-interpolation curve.  LOWER fan demand is the
+maximum of the three normalized GPU cooling demands.  UPPER fan demand is the
+maximum of CPU plus all GPU demands, so it exhausts heat from either source.
+CPU fan demand is primarily the CPU curve plus the specified 35/45/60% GPU
+airflow floors.  Global minimums are CPU 30%, LOWER 35%, and UPPER 35%.  A
 five-sample median followed by a short EMA filters spikes; demand rises by up
 to 10 percentage points per sample and falls by at most two.
+
+Confirmed reference-machine mapping:
+
+| Zone | PWM | Tach |
+| --- | --- | --- |
+| CPU cooler | `pwm1` | `fan1_input` |
+| Lower case airflow | `pwm3` | `fan3_input` |
+| Upper case airflow | `pwm6` | `fan6_input` |
 
 The daemon requires two independent opt-ins before writing PWM:
 
 - command-line `--write-pwm`;
-- `[controller] enabled = true` in the fully mapped CPU/SYS group config.
+- `[controller] enabled = true` in the mapped three-zone config.
 
 Monitor-only use never writes PWM:
 
@@ -107,9 +115,10 @@ sudo /usr/local/libexec/pc-fand.py --dry-run --profile silent
 ```
 
 Emergency raw-temperature triggers bypass filtering and request 100% cooling.
-Missing GPU junction/VRAM data imposes a 50% SYS floor; total GPU temperature
-failure imposes 70%; missing CPU Tctl requests CPU 100% and SYS at least 70%;
-total temperature failure requests every controlled fan at 100%.
+Missing GPU junction/VRAM data imposes 50% LOWER/UPPER floors; total GPU
+temperature failure imposes 70%; missing CPU Tctl requests CPU 100% and both
+airflow zones at least 70%; total temperature failure requests every
+controlled fan at 100%.
 
 ## Validated CPU path
 

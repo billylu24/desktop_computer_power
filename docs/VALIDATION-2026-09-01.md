@@ -1,9 +1,8 @@
 # Fan-control validation record — 2026-09-01
 
 This is an interim record.  Active PWM control and systemd were deliberately
-not enabled because the physical CPU/SYS fan roles have not yet been
-supplied/confirmed.  The final design no longer performs per-fan minimum-PWM
-calibration; it uses global CPU 30% and SYS 35% floors.
+not enabled during the initial discovery.  Physical roles are now confirmed:
+PWM1 CPU cooler, PWM3 lower case airflow, and PWM6 upper case airflow.
 
 ## Driver and electrical channel checks
 
@@ -65,7 +64,7 @@ not create a surface.  It is not counted as a successful load test.
 | CPU + all GPU null | CPU and case 100% |
 | Instant Junction 94°C | Immediate CPU and case 100%, emergency hold active |
 
-This table records the earlier pre-two-zone curves.  After the two-zone design
+This table records the earlier pre-final curves.  After the three-zone design
 update, algorithm unit tests are tracked by the current test suite rather than
 this historical sample count.  An unmapped configuration was also
 confirmed to reject `--write-pwm` with a nonzero exit code.
@@ -83,15 +82,24 @@ Kernel review found no new MCE, hardware error, SMU timeout, or PCI error.  The
 two `it87 Unknown symbol` messages in the log predate successful module loading
 and came from the initial attempt before loading the `hwmon-vid` dependency.
 
-## Two-zone controller update
+## Three-zone controller update
 
-The final controller schema has only CPU and SYS groups.  Its current automated
-suite passes 15 tests, including identical PWM writes to multiple SYS headers,
-whole-group 100% fallback on a zero-RPM tachometer, global 30/35% floors,
-35/45/60% GPU airflow floors for the CPU group, sensor failures, emergency
-hold, interpolation, filtering slew, and configuration rejection.
+The final controller schema has CPU, LOWER, and UPPER groups.  LOWER is led by
+GPU Core/Junction/VRAM demands.  UPPER takes the maximum CPU/GPU demand.  CPU
+retains the 35/45/60% GPU airflow floors.  Global minimums are 30/35/35%.
 
 A root monitor-only SILENT sample read all four real sensors without warnings:
-CPU 47°C, GPU Core 35°C, Junction 38°C, and VRAM 44°C.  It computed CPU 30.4%
-and SYS 35.0%.  No PWM was written and the active service remains disabled
-until physical CPU/SYS classification is confirmed.
+CPU 47°C, GPU Core 35°C, Junction 38°C, and VRAM 44°C.  No PWM was written and
+the active service remained disabled during this stage.
+
+The current 16-test automated suite passes.  Two supervised active-PWM
+injections verified independent zone behavior and PWM readback:
+
+- CPU-hot/GPU-cool: CPU 70.2%, LOWER 35.3%, UPPER 70.2%;
+- GPU-hot/CPU-cool: CPU 45.1%, LOWER 70.2%, UPPER 70.2%.
+
+A five-sample real-temperature BALANCED active test produced CPU 32.5%, LOWER
+35.3%, and UPPER 35.3%, with nonzero RPM on all three channels and no warnings.
+Every active test restored pwm1/pwm3/pwm6 to firmware automatic mode (`2`).
+Userspace files and the disabled mapped configuration were installed; the
+systemd service remains uninstalled/inactive pending longer load validation.

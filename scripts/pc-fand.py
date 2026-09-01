@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safe multi-sensor two-zone fan controller for the reference desktop.
+"""Safe multi-sensor three-zone fan controller for the reference desktop.
 
 The program is monitor-only unless both --write-pwm is supplied and
 [controller] enabled=true in fans.conf.  This double opt-in is deliberate.
@@ -184,7 +184,8 @@ def parse_fans(path: Path, allow_unmapped: bool) -> tuple[configparser.ConfigPar
     enabled = parser.getboolean("controller", "enabled", fallback=False)
     floors = {
         "cpu": parser.getint("controller", "cpu_fan_min_percent", fallback=30),
-        "sys": parser.getint("controller", "sys_fan_min_percent", fallback=35),
+        "lower": parser.getint("controller", "lower_fan_min_percent", fallback=35),
+        "upper": parser.getint("controller", "upper_fan_min_percent", fallback=35),
     }
     for role, floor in floors.items():
         if not 1 <= floor <= 100:
@@ -192,7 +193,7 @@ def parse_fans(path: Path, allow_unmapped: bool) -> tuple[configparser.ConfigPar
 
     channels: list[dict[str, Any]] = []
     incomplete_sections: list[str] = []
-    for section, role in (("cpu", "cpu"), ("sys", "sys")):
+    for section, role in (("cpu", "cpu"), ("lower", "lower"), ("upper", "upper")):
         if not parser.has_section(section):
             incomplete_sections.append(section)
             continue
@@ -211,7 +212,7 @@ def parse_fans(path: Path, allow_unmapped: bool) -> tuple[configparser.ConfigPar
         if names and len(names) != len(pwms):
             raise ConfigurationError(f"{section}.names must match the number of PWM paths")
         if not names:
-            label = "CPU_FAN" if role == "cpu" else "SYS_FAN"
+            label = f"{role.upper()}_FAN"
             names = [label if len(pwms) == 1 else f"{label}_{index}" for index in range(1, len(pwms) + 1)]
         for name, pwm, fan_input in zip(names, pwms, fan_inputs):
             channels.append(
@@ -228,8 +229,10 @@ def parse_fans(path: Path, allow_unmapped: bool) -> tuple[configparser.ConfigPar
         raise ConfigurationError(f"enabled controller has unmapped groups: {', '.join(incomplete_sections)}")
     if enabled and not any(channel["role"] == "cpu" for channel in channels):
         raise ConfigurationError("enabled controller has no mapped CPU fan")
-    if enabled and not any(channel["role"] == "sys" for channel in channels):
-        raise ConfigurationError("enabled controller has no mapped SYS fan")
+    if enabled and not any(channel["role"] == "lower" for channel in channels):
+        raise ConfigurationError("enabled controller has no mapped LOWER fan")
+    if enabled and not any(channel["role"] == "upper" for channel in channels):
+        raise ConfigurationError("enabled controller has no mapped UPPER fan")
     pwms = [channel["pwm"] for channel in channels]
     fan_inputs = [channel["fan_input"] for channel in channels]
     if len(pwms) != len(set(pwms)) or len(fan_inputs) != len(set(fan_inputs)):
@@ -269,7 +272,7 @@ def demands_for(
     emergency: dict[str, float],
     emergency_until: float,
     now: float,
-) -> tuple[float, float, float, dict[str, float | None], list[str]]:
+) -> tuple[float, float, float, float, dict[str, float | None], list[str]]:
     warnings: list[str] = []
     sensor_demands: dict[str, float | None] = {}
     for sensor in SENSORS:
@@ -286,7 +289,7 @@ def demands_for(
         )
     )
     if emergency_now or now < emergency_until:
-        return 100.0, 100.0, now + float(emergency["release_seconds"]) if emergency_now else emergency_until, sensor_demands, warnings
+        return 100.0, 100.0, 100.0, now + float(emergency["release_seconds"]) if emergency_now else emergency_until, sensor_demands, warnings
 
     cpu = sensor_demands["cpu_tctl"]
     gpu_core = sensor_demands["gpu_core"]
@@ -301,27 +304,42 @@ def demands_for(
     elif (gpu_junction is not None and filtered["gpu_junction"] >= 75) or (gpu_vram is not None and filtered["gpu_vram"] >= 72):
         gpu_airflow_floor = 35.0
     cpu_demand = max(cpu or 0, gpu_airflow_floor)
-    available = [value for value in (cpu, gpu_core, gpu_junction, gpu_vram) if value is not None]
-    sys_demand = max(available, default=0)
+    gpu_available = [value for value in (gpu_core, gpu_junction, gpu_vram) if value is not None]
+    lower_demand = max(gpu_available, default=0)
+    upper_demand = max([value for value in (cpu, *gpu_available) if value is not None], default=0)
 
     if gpu_junction is None or gpu_vram is None:
-        sys_demand = max(sys_demand, 50)
-        warnings.append("GPU junction/VRAM unavailable: SYS fan floor 50%")
+        lower_demand = max(lower_demand, 50)
+        upper_demand = max(upper_demand, 50)
+        warnings.append("GPU junction/VRAM unavailable: LOWER/UPPER fan floor 50%")
     if gpu_core is None and gpu_junction is None and gpu_vram is None:
-        sys_demand = max(sys_demand, 70)
-        warnings.append("all GPU temperatures unavailable: SYS fan floor 70%")
+        lower_demand = max(lower_demand, 70)
+        upper_demand = max(upper_demand, 70)
+        warnings.append("all GPU temperatures unavailable: LOWER/UPPER fan floor 70%")
     if cpu is None:
         cpu_demand = 100
-        sys_demand = max(sys_demand, 70)
-        warnings.append("CPU Tctl unavailable: CPU fan 100%, SYS fan floor 70%")
+        lower_demand = max(lower_demand, 70)
+        upper_demand = max(upper_demand, 70)
+        warnings.append("CPU Tctl unavailable: CPU fan 100%, LOWER/UPPER fan floor 70%")
     if cpu is None and gpu_core is None and gpu_junction is None and gpu_vram is None:
-        cpu_demand = sys_demand = 100
+        cpu_demand = lower_demand = upper_demand = 100
         warnings.append("all temperatures unavailable: all fans 100%")
-    return cpu_demand, sys_demand, emergency_until, sensor_demands, warnings
+    return cpu_demand, lower_demand, upper_demand, emergency_until, sensor_demands, warnings
 
 
-def apply_group_floors(cpu_demand: float, sys_demand: float, cpu_floor: float, sys_floor: float) -> tuple[float, float]:
-    return max(cpu_demand, cpu_floor), max(sys_demand, sys_floor)
+def apply_group_floors(
+    cpu_demand: float,
+    lower_demand: float,
+    upper_demand: float,
+    cpu_floor: float,
+    lower_floor: float,
+    upper_floor: float,
+) -> tuple[float, float, float]:
+    return (
+        max(cpu_demand, cpu_floor),
+        max(lower_demand, lower_floor),
+        max(upper_demand, upper_floor),
+    )
 
 
 def slew(previous: float | None, target: float, rise: float, fall: float) -> float:
@@ -357,14 +375,14 @@ class PwmController:
             self.restore()
             raise
 
-    def write_targets(self, cpu_percent: float, sys_percent: float) -> tuple[list[dict[str, Any]], list[str]]:
+    def write_targets(self, cpu_percent: float, lower_percent: float, upper_percent: float) -> tuple[list[dict[str, Any]], list[str]]:
         output: list[dict[str, Any]] = []
         warnings: list[str] = []
-        group_percent = {"cpu": cpu_percent, "sys": sys_percent}
+        group_percent = {"cpu": cpu_percent, "lower": lower_percent, "upper": upper_percent}
         rpms: dict[str, int] = {}
         for channel in self.channels:
             rpms[channel["pwm"]] = int(read_text(self.hwmon / channel["fan_input"]))
-        for role in ("cpu", "sys"):
+        for role in ("cpu", "lower", "upper"):
             if any(channel["role"] == role and rpms[channel["pwm"]] <= 0 for channel in self.channels):
                 group_percent[role] = 100.0
                 warnings.append(f"{role.upper()} fan tachometer reported 0 RPM: entire group forced to 100%")
@@ -438,7 +456,8 @@ def main() -> int:
     fan_config, channels = parse_fans(args.config, allow_unmapped=args.dry_run)
     hardware_enabled = fan_config.getboolean("controller", "enabled", fallback=False)
     cpu_floor = fan_config.getint("controller", "cpu_fan_min_percent", fallback=30)
-    sys_floor = fan_config.getint("controller", "sys_fan_min_percent", fallback=35)
+    lower_floor = fan_config.getint("controller", "lower_fan_min_percent", fallback=35)
+    upper_floor = fan_config.getint("controller", "upper_fan_min_percent", fallback=35)
     if args.write_pwm and not hardware_enabled:
         raise ConfigurationError("PWM writes refused: [controller] enabled is not true")
     injections = parse_injections(args.inject)
@@ -463,7 +482,8 @@ def main() -> int:
     signal.signal(signal.SIGINT, request_stop)
 
     previous_cpu: float | None = None
-    previous_sys: float | None = None
+    previous_lower: float | None = None
+    previous_upper: float | None = None
     emergency_until = 0.0
     count = 0
     try:
@@ -475,7 +495,7 @@ def main() -> int:
             raw.update(injections)
             filtered = filters.update(raw)
             profile_name = read_requested_profile(args.profile, args.profile_file)
-            cpu_target, sys_target, emergency_until, sensor_demands, warnings = demands_for(
+            cpu_target, lower_target, upper_target, emergency_until, sensor_demands, warnings = demands_for(
                 raw,
                 filtered,
                 profiles_data["profiles"][profile_name],
@@ -483,15 +503,23 @@ def main() -> int:
                 emergency_until,
                 started,
             )
-            cpu_target, sys_target = apply_group_floors(cpu_target, sys_target, cpu_floor, sys_floor)
+            cpu_target, lower_target, upper_target = apply_group_floors(
+                cpu_target,
+                lower_target,
+                upper_target,
+                cpu_floor,
+                lower_floor,
+                upper_floor,
+            )
             cpu_applied = slew(previous_cpu, cpu_target, float(profiles_data["filter"]["rise_percent_per_sample"]), float(profiles_data["filter"]["fall_percent_per_sample"]))
-            sys_applied = slew(previous_sys, sys_target, float(profiles_data["filter"]["rise_percent_per_sample"]), float(profiles_data["filter"]["fall_percent_per_sample"]))
-            previous_cpu, previous_sys = cpu_applied, sys_applied
+            lower_applied = slew(previous_lower, lower_target, float(profiles_data["filter"]["rise_percent_per_sample"]), float(profiles_data["filter"]["fall_percent_per_sample"]))
+            upper_applied = slew(previous_upper, upper_target, float(profiles_data["filter"]["rise_percent_per_sample"]), float(profiles_data["filter"]["fall_percent_per_sample"]))
+            previous_cpu, previous_lower, previous_upper = cpu_applied, lower_applied, upper_applied
 
             fan_rows: list[dict[str, Any]] = []
             if args.write_pwm:
                 assert controller is not None
-                fan_rows, fan_warnings = controller.write_targets(cpu_applied, sys_applied)
+                fan_rows, fan_warnings = controller.write_targets(cpu_applied, lower_applied, upper_applied)
                 warnings.extend(fan_warnings)
             elif controller and channels:
                 fan_rows = controller.status_only()
@@ -504,7 +532,8 @@ def main() -> int:
                 "filtered_sensors_c": {key: None if value is None else round(value, 2) for key, value in filtered.items()},
                 "sensor_demands_percent": {key: None if value is None else round(value, 1) for key, value in sensor_demands.items()},
                 "cpu_fan_target_percent": round(cpu_applied, 1),
-                "sys_fan_target_percent": round(sys_applied, 1),
+                "lower_fan_target_percent": round(lower_applied, 1),
+                "upper_fan_target_percent": round(upper_applied, 1),
                 "emergency_hold": started < emergency_until,
                 "warnings": warnings + ([f"gputemps: {gpu_error}"] if gpu_error else []),
                 "cpu_tctl_path": cpu_path,
