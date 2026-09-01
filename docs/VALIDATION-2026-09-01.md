@@ -1,8 +1,9 @@
 # Fan-control validation record — 2026-09-01
 
 This is an interim record.  Active PWM control and systemd were deliberately
-not enabled because physical CPU/case fan roles and minimum reliable PWM have
-not yet been supplied/confirmed.
+not enabled because the physical CPU/SYS fan roles have not yet been
+supplied/confirmed.  The final design no longer performs per-fan minimum-PWM
+calibration; it uses global CPU 30% and SYS 35% floors.
 
 ## Driver and electrical channel checks
 
@@ -14,7 +15,8 @@ not yet been supplied/confirmed.
   `pwm1/fan1_input`, `pwm3/fan3_input`, and `pwm6/fan6_input`.
 - Every test restored all six `pwmN_enable` attributes to firmware automatic
   mode (`2`).
-- No active-PWM calibration or Fan Stop test was performed.
+- A supervised identification test showed that raw PWM 0 still leaves the
+  installed fans at their hardware minimum RPM.  Fan Stop is not used.
 
 ## Real-sensor dry-run
 
@@ -63,7 +65,9 @@ not create a surface.  It is not counted as a successful load test.
 | CPU + all GPU null | CPU and case 100% |
 | Instant Junction 94°C | Immediate CPU and case 100%, emergency hold active |
 
-Algorithm unit tests: 8/8 passed.  An uncalibrated configuration was also
+This table records the earlier pre-two-zone curves.  After the two-zone design
+update, algorithm unit tests are tracked by the current test suite rather than
+this historical sample count.  An unmapped configuration was also
 confirmed to reject `--write-pwm` with a nonzero exit code.
 
 ## End state
@@ -78,3 +82,16 @@ confirmed to reject `--write-pwm` with a nonzero exit code.
 Kernel review found no new MCE, hardware error, SMU timeout, or PCI error.  The
 two `it87 Unknown symbol` messages in the log predate successful module loading
 and came from the initial attempt before loading the `hwmon-vid` dependency.
+
+## Two-zone controller update
+
+The final controller schema has only CPU and SYS groups.  Its current automated
+suite passes 15 tests, including identical PWM writes to multiple SYS headers,
+whole-group 100% fallback on a zero-RPM tachometer, global 30/35% floors,
+35/45/60% GPU airflow floors for the CPU group, sensor failures, emergency
+hold, interpolation, filtering slew, and configuration rejection.
+
+A root monitor-only SILENT sample read all four real sensors without warnings:
+CPU 47°C, GPU Core 35°C, Junction 38°C, and VRAM 44°C.  It computed CPU 30.4%
+and SYS 35.0%.  No PWM was written and the active service remains disabled
+until physical CPU/SYS classification is confirmed.

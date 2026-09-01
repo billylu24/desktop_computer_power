@@ -104,10 +104,14 @@ import json, sys
 d = json.loads(sys.argv[1])
 print(f"Profile: {d.get('profile', 'unknown').upper()}")
 print(f"Controller: {d.get('mode', 'unknown')}")
-print(f"CPU target: {d.get('cpu_fan_target_percent', '?')}%")
-print(f"Case demand: {d.get('case_demand_percent', '?')}%")
-for fan in d.get("fans", []):
-    print(f"{fan.get('name', '?')}: PWM {fan.get('pwm_percent', '?')}%, RPM {fan.get('rpm', '?')}")
+print("CPU FAN:")
+print(f"  Demand: {d.get('cpu_fan_target_percent', '?')}%")
+for fan in (fan for fan in d.get("fans", []) if fan.get("role") == "cpu"):
+    print(f"  {fan.get('name', '?')}: PWM {fan.get('pwm_percent', '?')}%, RPM {fan.get('rpm', '?')}")
+print("SYS FAN:")
+print(f"  Demand: {d.get('sys_fan_target_percent', '?')}%")
+for fan in (fan for fan in d.get("fans", []) if fan.get("role") == "sys"):
+    print(f"  {fan.get('name', '?')}: PWM {fan.get('pwm_percent', '?')}%, RPM {fan.get('rpm', '?')}")
 warnings = d.get("warnings", [])
 if warnings:
     print("Warnings:")

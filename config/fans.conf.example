@@ -2,37 +2,23 @@
 # The daemon locates this device dynamically by its hwmon name.  Never use a
 # hwmon number here because numbering changes across boots.
 hwmon_name = it8689
+cpu_fan_min_percent = 30
+sys_fan_min_percent = 35
 
-# Keep false until physical header mapping and minimum-PWM calibration are
-# complete.  --dry-run works with an unmapped/disabled configuration.
+# Keep false until the CPU/SYS header groups are physically identified.
+# --dry-run works with an unmapped/disabled configuration.
 enabled = false
 
 [cpu]
-name = CPU_FAN
-pwm = UNMAPPED
-fan_input = UNMAPPED
-minimum_start_pwm = UNCALIBRATED
-minimum_stable_pwm = UNCALIBRATED
+# Comma-separated, positionally paired lists.  CPU_FAN + CPU_OPT can both be
+# listed here when they are independently writable.
+pwm_paths = UNMAPPED
+fan_inputs = UNMAPPED
+names = CPU_FAN
 
-# Add one section for every connected case-fan header.  All case sections use
-# the same demand, but each is clamped to its calibrated stable PWM.
-[case.front]
-name = FRONT_FANS
-pwm = UNMAPPED
-fan_input = UNMAPPED
-minimum_start_pwm = UNCALIBRATED
-minimum_stable_pwm = UNCALIBRATED
-
-[case.rear]
-name = REAR_FAN
-pwm = UNMAPPED
-fan_input = UNMAPPED
-minimum_start_pwm = UNCALIBRATED
-minimum_stable_pwm = UNCALIBRATED
-
-[case.top]
-name = TOP_FANS
-pwm = UNMAPPED
-fan_input = UNMAPPED
-minimum_start_pwm = UNCALIBRATED
-minimum_stable_pwm = UNCALIBRATED
+[sys]
+# Every listed SYS header receives exactly the same target percentage.
+pwm_paths = UNMAPPED
+fan_inputs = UNMAPPED
+# Optional; leave empty to generate SYS_FAN_1, SYS_FAN_2, ... automatically.
+names =

@@ -35,7 +35,7 @@ profile, and active fan profile.  Any mismatch is reported as `CUSTOM`.
 
 ## Staged installation
 
-Fan commissioning is intentionally staged.  Do not skip mapping, calibration,
+Fan commissioning is intentionally staged.  Do not skip CPU/SYS group mapping,
 dry-run, active tests, and fault-injection tests.
 
 1. Install CPU control, the GPU temperature reader, configuration templates,
@@ -49,6 +49,10 @@ dry-run, active tests, and fault-injection tests.
    The installer leaves `/etc/pc-power/fans.conf` disabled and does not install
    or start `pc-fand.service`.  Consequently `pc-power` refuses profile changes
    rather than performing a partial CPU/GPU/Linux switch.
+
+   On upgrades, the installer preserves an existing `fans.conf` and always
+   refreshes `/etc/pc-power/fans.conf.example`.  An old per-fan configuration
+   must be migrated to the `[cpu]`/`[sys]` schema before service activation.
 
 2. Install the tested IT8689E-capable `it87` DKMS module:
 
@@ -83,16 +87,18 @@ CPU/GPU/Linux profile at boot.
 - GPU core, junction, and VRAM temperatures from the JSON output of the tested
   Blackwell MMIO `gputemps` reader.
 
-Each sensor has its own linear-interpolation curve.  Case fan demand is the
-maximum of the four normalized cooling demands.  CPU fan demand is primarily
-the CPU curve plus a deliberately limited GPU airflow contribution.  A
+Each sensor has its own linear-interpolation curve.  SYS fan demand is the
+maximum of the four normalized cooling demands, and every SYS header receives
+that same percentage.  CPU fan demand is primarily the CPU curve plus the
+specified 35/45/60% GPU airflow floors.  CPU and SYS global minimums are 30%
+and 35%; there is no per-fan curve or per-fan minimum calibration.  A
 five-sample median followed by a short EMA filters spikes; demand rises by up
 to 10 percentage points per sample and falls by at most two.
 
 The daemon requires two independent opt-ins before writing PWM:
 
 - command-line `--write-pwm`;
-- `[controller] enabled = true` in the fully mapped and calibrated config.
+- `[controller] enabled = true` in the fully mapped CPU/SYS group config.
 
 Monitor-only use never writes PWM:
 
@@ -101,8 +107,8 @@ sudo /usr/local/libexec/pc-fand.py --dry-run --profile silent
 ```
 
 Emergency raw-temperature triggers bypass filtering and request 100% cooling.
-Missing GPU junction/VRAM data imposes a 50% case floor; total GPU temperature
-failure imposes 70%; missing CPU Tctl requests CPU 100% and case at least 70%;
+Missing GPU junction/VRAM data imposes a 50% SYS floor; total GPU temperature
+failure imposes 70%; missing CPU Tctl requests CPU 100% and SYS at least 70%;
 total temperature failure requests every controlled fan at 100%.
 
 ## Validated CPU path
@@ -121,7 +127,7 @@ not burn tested.
 
 This project does not modify CPU voltage, Curve Optimizer, PBO scalar, boost
 override, thermal protection, GPU clocks, GPU voltage, GPU fan control, or
-VBIOS.  It never writes PWM 0 and does not implement Fan Stop.  RTX board fans
+VBIOS.  The daemon never writes PWM 0 and does not implement Fan Stop.  RTX board fans
 remain under VBIOS control.  On controlled shutdown, the daemon restores each
 header's saved firmware/automatic state; if restoration fails it attempts a
 100% manual fallback.

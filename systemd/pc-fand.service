@@ -1,5 +1,5 @@
 [Unit]
-Description=Multi-sensor CPU and case fan controller
+Description=Multi-sensor CPU and SYS fan controller
 After=multi-user.target
 
 [Service]

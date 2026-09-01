@@ -1,8 +1,8 @@
 # Fan commissioning procedure
 
-This procedure is required once per physical fan/header topology.  Do not copy
-another machine's `fans.conf`: splitter layout and minimum reliable PWM are
-physical properties of the installed fans.
+This procedure is required once per physical fan/header topology.  The final
+controller has only two outputs: a CPU group and a SYS group.  Every header in
+one group receives the same percentage.
 
 ## Reference-system discovery record
 
@@ -38,18 +38,19 @@ continue.
 4. Immediately restore that channel to its saved PWM and enable mode.
 5. Record splitters: one header may power several physical case fans while only
    one tach signal is reported.
-6. For every mapped channel, test 100, 80, 60, 50, 40, 35, 30, 25, and 20%.
-   Wait for RPM stabilization at each point.  Never test under load.
-7. Record conservative `minimum_start_pwm` and `minimum_stable_pwm` as raw
-   1–255 values.  The first version must remain continuously spinning and must
-   never write PWM 0.
-8. Populate `/etc/pc-power/fans.conf`; keep `enabled=false` during dry-run.
-9. Run at least five idle minutes plus short CPU-only and GPU-only loads with
+6. Classify each connected channel only as `CPU_FAN` or `SYS_FAN`.  CPU_FAN and
+   CPU_OPT may both be placed in the CPU group.  All case headers go in SYS.
+7. Populate the comma-separated `pwm_paths`, `fan_inputs`, and optional `names`
+   lists in `/etc/pc-power/fans.conf`; keep `enabled=false` during dry-run.
+   The global floors are CPU 30% and SYS 35%.  Do not configure Fan Stop.
+8. Run at least five idle minutes plus short CPU-only and GPU-only loads with
    `pc-fand.py --dry-run`.  Confirm demand responds to the correct heat source.
-10. Test the injected sensor-failure modes without damaging or unloading real
+9. Test the injected sensor-failure modes without damaging or unloading real
     sensors.
-11. Perform a supervised active BALANCED PWM test.  Confirm every RPM remains
+10. Perform a supervised active BALANCED PWM test.  Confirm every RPM remains
     nonzero and that exiting restores `pwmN_enable=2`.
+11. If any SYS fan cannot sustain 35%, raise the single global
+    `sys_fan_min_percent` for the whole group (for example to 40%).
 12. Only then set `enabled=true` and use `enable-fan-service.sh`.
 
 ## Failure injection examples (dry-run only)
@@ -65,5 +66,5 @@ sudo /usr/local/libexec/pc-fand.py --dry-run --once --profile balanced \
   --inject cpu_tctl=null,gpu_core=null,gpu_junction=null,gpu_vram=null
 ```
 
-Expected targets are respectively: case at least 50%; CPU 100% and case at
+Expected targets are respectively: SYS at least 50%; CPU 100% and SYS at
 least 70%; all controlled fans 100%.
