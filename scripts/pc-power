@@ -1,99 +1,253 @@
 #!/bin/bash
-# Volatile whole-PC power profiles for the validated Ryzen 7900X + NVIDIA GPU.
+# Explicit whole-PC profiles. Only pc-fand runs continuously, and it manages
+# fans only; this command never creates a CPU/GPU/Linux enforcement loop.
 set -euo pipefail
 
 readonly CPU_POWER=/usr/local/sbin/cpu-power
 readonly NVIDIA_SMI=/usr/bin/nvidia-smi
+readonly POWERPROFILESCTL=/usr/bin/powerprofilesctl
+readonly PYTHON=/usr/bin/python3
+readonly FAN_PROFILE_FILE=/run/pc-power/fan-profile
+readonly FAN_STATUS_FILE=/run/pc-power/fan-status.json
+readonly FAN_STATUS_MAX_AGE=10
 
-die() {
-  printf 'pc-power: %s\n' "$*" >&2
-  exit 1
-}
+die() { printf 'pc-power: %s\n' "$*" >&2; exit 1; }
+usage() { die 'usage: pc-power {silent|balanced|stock|performance|status}'; }
 
 [[ ${EUID} -eq 0 ]] || die 'run as root (for example: sudo pc-power silent)'
 [[ -x "$CPU_POWER" ]] || die "missing CPU controller: $CPU_POWER"
 [[ -x "$NVIDIA_SMI" ]] || die "missing NVIDIA controller: $NVIDIA_SMI"
+[[ -x "$POWERPROFILESCTL" ]] || die "missing Linux profile controller: $POWERPROFILESCTL"
+[[ -x "$PYTHON" ]] || die "missing Python interpreter: $PYTHON"
 
 cpu_limits() {
   local pm
-  pm=$("$CPU_POWER" status) || die 'CPU status read failed'
+  pm=$($CPU_POWER status) || die 'CPU status read failed'
   CPU_PPT=$(awk -F': ' '/\(PPT_LIMIT\)/ {print $2; exit}' <<<"$pm")
   CPU_TDC=$(awk -F': ' '/\(TDC_LIMIT\)/ {print $2; exit}' <<<"$pm")
   CPU_EDC=$(awk -F': ' '/\(EDC_LIMIT\)/ {print $2; exit}' <<<"$pm")
+  CPU_TCTL=$(awk -F': ' '/\(THM_VALUE\)/ {print $2; exit}' <<<"$pm")
   [[ -n ${CPU_PPT:-} && -n ${CPU_TDC:-} && -n ${CPU_EDC:-} ]] || die 'CPU PM-table limits unavailable'
-}
-
-gpu_limit() {
-  GPU_LIMIT=$("$NVIDIA_SMI" --query-gpu=power.limit --format=csv,noheader,nounits | head -n1 | xargs) || die 'GPU power-limit read failed'
-  GPU_LIMIT=$(printf '%.0f' "$GPU_LIMIT")
-}
-
-profile() {
-  cpu_limits
-  gpu_limit
-  case "$CPU_PPT/$CPU_TDC/$CPU_EDC/$GPU_LIMIT" in
-    88.0/75.0/150.0/175) printf 'SILENT' ;;
-    142.0/110.0/170.0/220) printf 'BALANCED' ;;
-    230.0/160.0/225.0/250) printf 'STOCK' ;;
-    *) printf 'CUSTOM' ;;
+  CPU_PPT_INT=$(printf '%.0f' "$CPU_PPT")
+  CPU_TDC_INT=$(printf '%.0f' "$CPU_TDC")
+  CPU_EDC_INT=$(printf '%.0f' "$CPU_EDC")
+  case "$CPU_PPT_INT/$CPU_TDC_INT/$CPU_EDC_INT" in
+    88/75/150) CPU_MODE='65W Eco' ;;
+    142/110/170) CPU_MODE='105W Eco' ;;
+    230/160/225) CPU_MODE='170W' ;;
+    *) CPU_MODE='Custom' ;;
   esac
 }
 
+gpu_status() {
+  local line
+  line=$($NVIDIA_SMI --query-gpu=name,power.draw,power.limit --format=csv,noheader,nounits | head -n1) || die 'GPU status read failed'
+  IFS=',' read -r GPU_NAME GPU_DRAW GPU_LIMIT <<<"$line"
+  GPU_NAME=$(xargs <<<"$GPU_NAME")
+  GPU_DRAW=$(xargs <<<"$GPU_DRAW")
+  GPU_LIMIT=$(xargs <<<"$GPU_LIMIT")
+  GPU_LIMIT_INT=$(printf '%.0f' "$GPU_LIMIT")
+}
+
+linux_status() {
+  LINUX_PROFILE=$($POWERPROFILESCTL get) || die 'Linux power-profile read failed'
+  LINUX_PROFILE=$(xargs <<<"$LINUX_PROFILE")
+  EPP=$(cat /sys/devices/system/cpu/cpufreq/policy0/energy_performance_preference 2>/dev/null || printf 'unavailable')
+}
+
+fan_status_json() {
+  [[ -r "$FAN_STATUS_FILE" ]] || return 1
+  $PYTHON - "$FAN_STATUS_FILE" "$FAN_STATUS_MAX_AGE" <<'PY'
+import json, sys, time
+path, max_age = sys.argv[1], int(sys.argv[2])
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+age = time.time() - float(data.get("timestamp", 0))
+if age < 0 or age > max_age:
+    raise SystemExit(2)
+print(json.dumps(data, separators=(",", ":")))
+PY
+}
+
+fan_status() {
+  if FAN_JSON=$(fan_status_json); then
+    FAN_PROFILE=$($PYTHON -c 'import json,sys; print(json.loads(sys.argv[1]).get("profile","unknown"))' "$FAN_JSON")
+    FAN_MODE=$($PYTHON -c 'import json,sys; print(json.loads(sys.argv[1]).get("mode","unknown"))' "$FAN_JSON")
+  else
+    FAN_JSON=''
+    FAN_PROFILE='unavailable'
+    FAN_MODE='unavailable'
+  fi
+}
+
+current_profile() {
+  cpu_limits
+  gpu_status
+  linux_status
+  fan_status
+  case "$CPU_PPT_INT/$CPU_TDC_INT/$CPU_EDC_INT/$GPU_LIMIT_INT/$LINUX_PROFILE/$FAN_PROFILE/$FAN_MODE" in
+    88/75/150/175/power-saver/silent/write-pwm) CURRENT_PROFILE='SILENT' ;;
+    142/110/170/220/balanced/balanced/write-pwm) CURRENT_PROFILE='BALANCED' ;;
+    230/160/225/250/balanced/stock/write-pwm) CURRENT_PROFILE='STOCK' ;;
+    230/160/225/250/performance/performance/write-pwm) CURRENT_PROFILE='PERFORMANCE' ;;
+    *) CURRENT_PROFILE='CUSTOM' ;;
+  esac
+}
+
+show_fans() {
+  if [[ -z $FAN_JSON ]]; then
+    printf 'Profile: unavailable (pc-fand status missing or stale)\n'
+    return
+  fi
+  $PYTHON - "$FAN_JSON" <<'PY'
+import json, sys
+d = json.loads(sys.argv[1])
+print(f"Profile: {d.get('profile', 'unknown').upper()}")
+print(f"Controller: {d.get('mode', 'unknown')}")
+print(f"CPU target: {d.get('cpu_fan_target_percent', '?')}%")
+print(f"Case demand: {d.get('case_demand_percent', '?')}%")
+for fan in d.get("fans", []):
+    print(f"{fan.get('name', '?')}: PWM {fan.get('pwm_percent', '?')}%, RPM {fan.get('rpm', '?')}")
+warnings = d.get("warnings", [])
+if warnings:
+    print("Warnings:")
+    for warning in warnings:
+        print(f"  - {warning}")
+PY
+}
+
+show_gpu_temperatures() {
+  if [[ -n $FAN_JSON ]]; then
+    $PYTHON - "$FAN_JSON" <<'PY'
+import json, sys
+d = json.loads(sys.argv[1]).get("sensors_c", {})
+def display(key):
+    value = d.get(key)
+    return "unavailable" if value is None else f"{value:g}°C"
+print(f"Core: {display('gpu_core')}")
+print(f"Junction: {display('gpu_junction')}")
+print(f"VRAM: {display('gpu_vram')}")
+PY
+  else
+    printf 'Core: unavailable\nJunction: unavailable\nVRAM: unavailable\n'
+  fi
+}
+
 show_status() {
-  local mode
-  mode=$(profile)
-  printf 'Power Profile: %s\n\nCPU:\n' "$mode"
-  "$CPU_POWER" status
-  printf '\nGPU:\n'
-  "$NVIDIA_SMI" --query-gpu=name,power.draw,power.limit,power.default_limit,power.min_limit,power.max_limit --format=csv
+  current_profile
+  printf 'Power Profile: %s\n\n' "$CURRENT_PROFILE"
+  printf 'CPU:\nMode: %s\nPPT: %sW\nTDC: %sA\nEDC: %sA\nTctl: %s°C\n\n' \
+    "$CPU_MODE" "$CPU_PPT" "$CPU_TDC" "$CPU_EDC" "${CPU_TCTL:-unavailable}"
+  printf 'GPU:\nName: %s\nPower Limit: %sW\nPower Draw: %sW\n' "$GPU_NAME" "$GPU_LIMIT" "$GPU_DRAW"
+  show_gpu_temperatures
+  printf '\nLinux:\nProfile: %s\nEPP: %s\n\nFans:\n' "$LINUX_PROFILE" "$EPP"
+  show_fans
 }
 
 set_gpu() {
   local target=$1 old
-  gpu_limit
-  old=$GPU_LIMIT
-  "$NVIDIA_SMI" -pl "$target" >/dev/null || die "GPU: failed to set ${target}W"
-  gpu_limit
-  [[ $GPU_LIMIT -eq $target ]] || die "GPU: readback mismatch (wanted ${target}W, got ${GPU_LIMIT}W)"
-  printf 'GPU:\n%dW -> %dW  OK\n\n' "$old" "$GPU_LIMIT"
+  gpu_status
+  old=$GPU_LIMIT_INT
+  $NVIDIA_SMI -pl "$target" >/dev/null || die "GPU: failed to set ${target}W"
+  gpu_status
+  [[ $GPU_LIMIT_INT -eq $target ]] || die "GPU: readback mismatch (wanted ${target}W, got ${GPU_LIMIT}W)"
+  printf 'GPU: %dW -> %dW  OK\n' "$old" "$GPU_LIMIT_INT"
 }
 
 set_cpu() {
   local target=$1 label=$2
   cpu_limits
-  printf 'CPU:\n%s -> %s\n' "${CPU_PPT}W PPT / ${CPU_TDC}A TDC / ${CPU_EDC}A EDC" "$label"
-  "$CPU_POWER" "$target" || die "CPU: failed to set ${label}"
-  printf 'OK\n\n'
+  printf 'CPU: %s -> %s\n' "$CPU_MODE" "$label"
+  $CPU_POWER "$target" >/dev/null || die "CPU: failed to set ${label}"
+  cpu_limits
+  printf 'PPT/TDC/EDC: %sW/%sA/%sA  OK\n' "$CPU_PPT" "$CPU_TDC" "$CPU_EDC"
+}
+
+set_linux() {
+  local target=$1
+  $POWERPROFILESCTL set "$target" || die "Linux: failed to set $target"
+  linux_status
+  [[ $LINUX_PROFILE == "$target" ]] || die "Linux: readback mismatch (wanted $target, got $LINUX_PROFILE)"
+  printf 'Linux: %s  OK\n' "$LINUX_PROFILE"
+}
+
+set_fan_profile() {
+  local target=$1 deadline
+  install -d -m 0755 "$(dirname "$FAN_PROFILE_FILE")"
+  printf '%s\n' "$target" >"${FAN_PROFILE_FILE}.new"
+  chmod 0644 "${FAN_PROFILE_FILE}.new"
+  mv -f "${FAN_PROFILE_FILE}.new" "$FAN_PROFILE_FILE"
+  deadline=$((SECONDS + 8))
+  while (( SECONDS < deadline )); do
+    sleep 1
+    fan_status
+    if [[ $FAN_PROFILE == "$target" && $FAN_MODE == write-pwm ]]; then
+      printf 'Fans: %s  OK\n' "${target^^}"
+      return 0
+    fi
+  done
+  die "Fans: pc-fand did not confirm write-pwm profile ${target^^}"
+}
+
+verify_profile() {
+  local wanted=$1
+  current_profile
+  [[ $CURRENT_PROFILE == "$wanted" ]] || die "profile readback mismatch (wanted $wanted, got $CURRENT_PROFILE)"
+  printf '\nCurrent profile: %s\n' "$CURRENT_PROFILE"
+}
+
+switch_profile() {
+  local requested=$1 fan_first=0
+  fan_status
+  [[ $FAN_MODE == write-pwm ]] ||
+    die 'pc-fand is not actively controlling fans; refusing a partial CPU/GPU/Linux switch'
+  printf 'Switching to %s...\n\n' "${requested^^}"
+  case "$requested" in
+    silent)
+      set_gpu 175
+      set_cpu 65 '65W Eco'
+      set_linux power-saver
+      set_fan_profile silent
+      verify_profile SILENT
+      ;;
+    balanced)
+      cpu_limits
+      gpu_status
+      if (( CPU_PPT_INT < 142 || GPU_LIMIT_INT < 220 )); then
+        set_fan_profile balanced
+        fan_first=1
+      fi
+      set_gpu 220
+      set_cpu 105 '105W Eco'
+      set_linux balanced
+      (( fan_first == 1 )) || set_fan_profile balanced
+      verify_profile BALANCED
+      ;;
+    stock)
+      cpu_limits
+      gpu_status
+      if (( CPU_PPT_INT < 230 || GPU_LIMIT_INT < 250 )); then
+        set_fan_profile stock
+        fan_first=1
+      fi
+      set_cpu 170 '170W'
+      set_gpu 250
+      set_linux balanced
+      (( fan_first == 1 )) || set_fan_profile stock
+      verify_profile STOCK
+      ;;
+    performance)
+      set_fan_profile performance
+      set_cpu 170 '170W'
+      set_gpu 250
+      set_linux performance
+      verify_profile PERFORMANCE
+      ;;
+  esac
 }
 
 case "${1:-}" in
-  status)
-    [[ $# -eq 1 ]] || die 'usage: pc-power {silent|balanced|stock|status}'
-    show_status
-    ;;
-  silent)
-    [[ $# -eq 1 ]] || die 'usage: pc-power {silent|balanced|stock|status}'
-    printf 'Switching to SILENT...\n\n'
-    set_gpu 175
-    set_cpu 65 '65W Eco'
-    [[ $(profile) == SILENT ]] || die 'profile readback mismatch after SILENT switch'
-    printf 'Current profile: SILENT\n'
-    ;;
-  balanced)
-    [[ $# -eq 1 ]] || die 'usage: pc-power {silent|balanced|stock|status}'
-    printf 'Switching to BALANCED...\n\n'
-    set_gpu 220
-    set_cpu 105 '105W Eco'
-    [[ $(profile) == BALANCED ]] || die 'profile readback mismatch after BALANCED switch'
-    printf 'Current profile: BALANCED\n'
-    ;;
-  stock)
-    [[ $# -eq 1 ]] || die 'usage: pc-power {silent|balanced|stock|status}'
-    printf 'Switching to STOCK...\n\n'
-    set_cpu 170 '170W'
-    set_gpu 250
-    [[ $(profile) == STOCK ]] || die 'profile readback mismatch after STOCK switch'
-    printf 'Current profile: STOCK\n'
-    ;;
-  *) die 'usage: pc-power {silent|balanced|stock|status}' ;;
+  status) [[ $# -eq 1 ]] || usage; show_status ;;
+  silent|balanced|stock|performance) [[ $# -eq 1 ]] || usage; switch_profile "$1" ;;
+  *) usage ;;
 esac

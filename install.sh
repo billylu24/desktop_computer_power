@@ -2,10 +2,14 @@
 # Installs the validated, volatile Ryzen Raphael + NVIDIA power-profile commands.
 set -euo pipefail
 
-readonly ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+readonly ROOT_DIR
 readonly SOURCE_DIR=/usr/local/src/ryzen_smu
 readonly RYZEN_SMU_REPO=https://github.com/amkillam/ryzen_smu.git
 readonly RYZEN_SMU_COMMIT=d2983668300dd2a598e5a7dc40e71ce0678cc270
+readonly GPUTEMPS_SOURCE_DIR=/usr/local/src/gputemps
+readonly GPUTEMPS_REPO=https://github.com/ThomasBaruzier/gddr6-core-junction-vram-temps.git
+readonly GPUTEMPS_COMMIT=37688e080165aefdf3842889cc5535c6be7ca073
 
 die() {
   printf 'install.sh: %s\n' "$*" >&2
@@ -13,10 +17,10 @@ die() {
 }
 
 [[ ${EUID} -eq 0 ]] || die 'run as root: sudo ./install.sh'
-[[ -f "$ROOT_DIR/scripts/cpu-power" && -f "$ROOT_DIR/scripts/pc-power" && -f "$ROOT_DIR/scripts/ryzen4_ctl.rb" ]] || die 'run from a complete repository checkout'
+[[ -f "$ROOT_DIR/scripts/cpu-power" && -f "$ROOT_DIR/scripts/pc-power" && -f "$ROOT_DIR/scripts/pc-fand.py" && -f "$ROOT_DIR/scripts/ryzen4_ctl.rb" ]] || die 'run from a complete repository checkout'
 
 apt update
-apt install -y git dkms build-essential "linux-headers-$(uname -r)" ruby lm-sensors stress-ng
+apt install -y git dkms build-essential "linux-headers-$(uname -r)" ruby lm-sensors stress-ng python3 power-profiles-daemon libpci-dev
 
 if [[ -e "$SOURCE_DIR/.git" ]]; then
   git -C "$SOURCE_DIR" fetch --depth 1 origin "$RYZEN_SMU_COMMIT"
@@ -34,10 +38,33 @@ if ! dkms status | grep -q '^ryzen_smu/0.1.7, .*: installed$'; then
   make -C "$SOURCE_DIR" dkms-install
 fi
 
-install -d -m 0755 /usr/local/libexec /usr/local/sbin
+if [[ -e "$GPUTEMPS_SOURCE_DIR/.git" ]]; then
+  git -C "$GPUTEMPS_SOURCE_DIR" fetch origin "$GPUTEMPS_COMMIT"
+elif [[ -e "$GPUTEMPS_SOURCE_DIR" ]]; then
+  die "$GPUTEMPS_SOURCE_DIR exists but is not a Git checkout"
+else
+  git clone "$GPUTEMPS_REPO" "$GPUTEMPS_SOURCE_DIR"
+fi
+git -C "$GPUTEMPS_SOURCE_DIR" checkout --detach "$GPUTEMPS_COMMIT"
+if git -C "$GPUTEMPS_SOURCE_DIR" apply --check "$ROOT_DIR/patches/gputemps-rtx5070-gb205.patch" 2>/dev/null; then
+  git -C "$GPUTEMPS_SOURCE_DIR" apply "$ROOT_DIR/patches/gputemps-rtx5070-gb205.patch"
+elif ! git -C "$GPUTEMPS_SOURCE_DIR" apply --reverse --check "$ROOT_DIR/patches/gputemps-rtx5070-gb205.patch" 2>/dev/null; then
+  die 'gputemps GB205 patch does not apply cleanly to the pinned source'
+fi
+make -C "$GPUTEMPS_SOURCE_DIR" clean all
+
+install -d -m 0755 /usr/local/libexec /usr/local/sbin /etc/pc-power /usr/local/share/desktop-computer-power
 install -m 0644 "$ROOT_DIR/scripts/ryzen4_ctl.rb" /usr/local/libexec/ryzen4_ctl.rb
+install -m 0755 "$GPUTEMPS_SOURCE_DIR/gputemps" /usr/local/libexec/gputemps
+install -m 0755 "$ROOT_DIR/scripts/pc-fand.py" /usr/local/libexec/pc-fand.py
 install -m 0755 "$ROOT_DIR/scripts/cpu-power" /usr/local/sbin/cpu-power
 install -m 0755 "$ROOT_DIR/scripts/pc-power" /usr/local/sbin/pc-power
+install -m 0644 "$ROOT_DIR/config/fan-profiles.json" /etc/pc-power/fan-profiles.json
+if [[ ! -e /etc/pc-power/fans.conf ]]; then
+  install -m 0644 "$ROOT_DIR/config/fans.conf.example" /etc/pc-power/fans.conf
+fi
+install -m 0644 "$ROOT_DIR/systemd/pc-fand.service" /usr/local/share/desktop-computer-power/pc-fand.service
 
-printf '%s\n' 'Installed. No boot-time power profile was configured.'
-printf '%s\n' 'Load the module when needed: sudo modprobe ryzen_smu'
+printf '%s\n' 'Installed userspace files. Fan writes and pc-fand.service remain disabled.'
+printf '%s\n' 'Load the CPU module when needed: sudo modprobe ryzen_smu'
+printf '%s\n' 'Complete fan mapping/calibration and active testing before enable-fan-service.sh.'

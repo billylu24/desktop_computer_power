@@ -1,0 +1,17 @@
+[Unit]
+Description=Multi-sensor CPU and case fan controller
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStartPre=/sbin/modprobe it87
+ExecStart=/usr/local/libexec/pc-fand.py --write-pwm
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=pc-power
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

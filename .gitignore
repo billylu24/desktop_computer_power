@@ -7,3 +7,5 @@
 Module.symvers
 modules.order
 ryzen-ppt-validation-*.log
+__pycache__/
+*.py[cod]

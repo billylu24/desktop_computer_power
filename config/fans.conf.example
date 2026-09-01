@@ -1,0 +1,38 @@
+[controller]
+# The daemon locates this device dynamically by its hwmon name.  Never use a
+# hwmon number here because numbering changes across boots.
+hwmon_name = it8689
+
+# Keep false until physical header mapping and minimum-PWM calibration are
+# complete.  --dry-run works with an unmapped/disabled configuration.
+enabled = false
+
+[cpu]
+name = CPU_FAN
+pwm = UNMAPPED
+fan_input = UNMAPPED
+minimum_start_pwm = UNCALIBRATED
+minimum_stable_pwm = UNCALIBRATED
+
+# Add one section for every connected case-fan header.  All case sections use
+# the same demand, but each is clamped to its calibrated stable PWM.
+[case.front]
+name = FRONT_FANS
+pwm = UNMAPPED
+fan_input = UNMAPPED
+minimum_start_pwm = UNCALIBRATED
+minimum_stable_pwm = UNCALIBRATED
+
+[case.rear]
+name = REAR_FAN
+pwm = UNMAPPED
+fan_input = UNMAPPED
+minimum_start_pwm = UNCALIBRATED
+minimum_stable_pwm = UNCALIBRATED
+
+[case.top]
+name = TOP_FANS
+pwm = UNMAPPED
+fan_input = UNMAPPED
+minimum_start_pwm = UNCALIBRATED
+minimum_stable_pwm = UNCALIBRATED

@@ -1,0 +1,17 @@
+diff --git a/src/sensor.c b/src/sensor.c
+index faa17c0..f448b3b 100644
+--- a/src/sensor.c
++++ b/src/sensor.c
+@@ -12,4 +12,5 @@
+ #define PCI_DEVICE_ID_RTX_5080 0x2B82u
+ #define PCI_DEVICE_ID_RTX_5070_TI 0x2C05u
+ #define PCI_DEVICE_ID_RTX_5070 0x2C02u
++#define PCI_DEVICE_ID_RTX_5070_GB205 0x2F04u
+ #define PCI_DEVICE_ID_RTX_5060_TI 0x2D04u
+@@ -116,5 +117,6 @@ static const DeviceProfile device_profiles[] = {
+     { PCI_DEVICE_ID_RTX_5080, &gddr7_profile },
+     { PCI_DEVICE_ID_RTX_5070_TI, &gddr7_profile },
+     { PCI_DEVICE_ID_RTX_5070, &gddr7_profile },
++    { PCI_DEVICE_ID_RTX_5070_GB205, &gddr7_profile },
+     { PCI_DEVICE_ID_RTX_5060_TI, &gddr7_profile },
+ };
