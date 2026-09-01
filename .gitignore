@@ -1,0 +1,9 @@
+# Kernel/DKMS build products and local validation data
+*.ko
+*.o
+*.mod
+*.mod.c
+*.cmd
+Module.symvers
+modules.order
+ryzen-ppt-validation-*.log

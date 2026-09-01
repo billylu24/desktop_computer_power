@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Runtime Ryzen 7000 Eco-mode selector.  Settings are volatile and reset by BIOS on reboot.
+set -euo pipefail
+
+readonly SMU_DIR=/sys/kernel/ryzen_smu_drv
+readonly CONTROL=/usr/local/libexec/ryzen4_ctl.rb
+
+die() {
+  printf 'cpu-power: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ ${EUID} -eq 0 ]] || die 'run as root (for example: sudo cpu-power 105)'
+[[ -d "$SMU_DIR" ]] || die "missing $SMU_DIR; load the verified module with: modprobe ryzen_smu"
+[[ -f "$CONTROL" ]] || die "missing control script: $CONTROL"
+
+status() {
+  ruby "$CONTROL" --pm-monitor
+}
+
+verify() {
+  local want_ppt=$1 want_tdc=$2 want_edc=$3 pm got_ppt got_tdc got_edc
+  pm=$(status) || die 'PM-table readback failed'
+  printf '%s\n' "$pm"
+  got_ppt=$(awk -F': ' '/\(PPT_LIMIT\)/ {print $2; exit}' <<<"$pm")
+  got_tdc=$(awk -F': ' '/\(TDC_LIMIT\)/ {print $2; exit}' <<<"$pm")
+  got_edc=$(awk -F': ' '/\(EDC_LIMIT\)/ {print $2; exit}' <<<"$pm")
+  [[ $got_ppt == "$want_ppt.0" && $got_tdc == "$want_tdc.0" && $got_edc == "$want_edc.0" ]] ||
+    die "readback mismatch (wanted PPT/TDC/EDC ${want_ppt}/${want_tdc}/${want_edc}, got ${got_ppt:-?}/${got_tdc:-?}/${got_edc:-?})"
+}
+
+case "${1:-}" in
+  status)
+    [[ $# -eq 1 ]] || die 'usage: cpu-power {65|105|170|status}'
+    status
+    ;;
+  65)  [[ $# -eq 1 ]] || die 'usage: cpu-power {65|105|170|status}'; ruby "$CONTROL" --verbose --set-eco-mode 65; verify 88 75 150 ;;
+  105) [[ $# -eq 1 ]] || die 'usage: cpu-power {65|105|170|status}'; ruby "$CONTROL" --verbose --set-eco-mode 105; verify 142 110 170 ;;
+  170) [[ $# -eq 1 ]] || die 'usage: cpu-power {65|105|170|status}'; ruby "$CONTROL" --verbose --set-eco-mode 170; verify 230 160 225 ;;
+  *) die 'usage: cpu-power {65|105|170|status}' ;;
+esac
