@@ -29,4 +29,15 @@ grep -q 'mmio' "$SOURCE_DIR/it87.c" || die 'pinned source does not contain the G
 
 (cd "$SOURCE_DIR" && ./dkms-install.sh)
 modinfo it87 >/dev/null || die 'it87 is not available through modprobe after DKMS installation'
-printf 'Installed it87 commit %s. No PWM values were changed.\n' "$COMMIT"
+modprobe it87 || die 'DKMS installed it87, but the kernel refused to load it; check Secure Boot and the kernel log'
+
+found_it8689=0
+for name_file in /sys/class/hwmon/hwmon*/name; do
+  if [[ -r $name_file ]] && grep -qx it8689 "$name_file"; then
+    found_it8689=1
+    break
+  fi
+done
+(( found_it8689 == 1 )) || die 'it87 loaded, but no IT8689E hwmon device appeared'
+
+printf 'Installed and loaded it87 commit %s. No PWM values were changed.\n' "$COMMIT"

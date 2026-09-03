@@ -57,6 +57,7 @@ install -d -m 0755 /usr/local/libexec /usr/local/sbin /etc/pc-power /usr/local/s
 install -m 0644 "$ROOT_DIR/scripts/ryzen4_ctl.rb" /usr/local/libexec/ryzen4_ctl.rb
 install -m 0755 "$GPUTEMPS_SOURCE_DIR/gputemps" /usr/local/libexec/gputemps
 install -m 0755 "$ROOT_DIR/scripts/pc-fand.py" /usr/local/libexec/pc-fand.py
+install -m 0755 "$ROOT_DIR/scripts/pc-power-silent-at-boot" /usr/local/libexec/pc-power-silent-at-boot
 install -m 0755 "$ROOT_DIR/scripts/cpu-power" /usr/local/sbin/cpu-power
 install -m 0755 "$ROOT_DIR/scripts/pc-power" /usr/local/sbin/pc-power
 install -m 0644 "$ROOT_DIR/config/fan-profiles.json" /etc/pc-power/fan-profiles.json
@@ -68,6 +69,7 @@ elif ! grep -q '^\[lower\]$' /etc/pc-power/fans.conf || ! grep -q '^\[upper\]$' 
   printf '%s\n' 'Migrate it using /etc/pc-power/fans.conf.example before enabling pc-fand.' >&2
 fi
 install -m 0644 "$ROOT_DIR/systemd/pc-fand.service" /usr/local/share/desktop-computer-power/pc-fand.service
+install -m 0644 "$ROOT_DIR/systemd/pc-power-silent.service" /usr/local/share/desktop-computer-power/pc-power-silent.service
 
 printf '%s\n' 'Installed userspace files. Fan writes and pc-fand.service remain disabled.'
 printf '%s\n' 'Load the CPU module when needed: sudo modprobe ryzen_smu'

@@ -7,9 +7,16 @@ Reproducible, runtime-only power and cooling controls for the tested desktop:
 - NVIDIA GeForce RTX 5070 (175–250 W power-limit range)
 - Ubuntu 26.04 with `amd-pstate-epp` and power-profiles-daemon
 
+Secure Boot must be disabled on this configuration.  The Blackwell temperature
+reader accesses GPU MMIO through `/dev/mem`, which the kernel's Secure Boot
+lockdown rejects even when the external `it87` module has a valid MOK signature.
+Confirm `[none] integrity confidentiality` in
+`/sys/kernel/security/lockdown` before commissioning the controller.
+
 CPU power settings remain volatile: rebooting returns the processor to its BIOS
-configuration.  No service in this project continuously enforces CPU, GPU, or
-Linux power profiles.  The only intended daemon is the fan controller.
+configuration.  The optional `pc-power-silent.service` reapplies SILENT once
+during boot; it does not continuously enforce CPU, GPU, or Linux settings.  The
+only intended continuous daemon is the fan controller.
 
 ## Whole-PC profiles
 
@@ -54,28 +61,22 @@ dry-run, active tests, and fault-injection tests.
    refreshes `/etc/pc-power/fans.conf.example`.  An old configuration must be
    migrated to the `[cpu]`/`[lower]`/`[upper]` schema before service activation.
 
-2. First try the Ubuntu kernel's in-tree `it87` module:
+2. Install the tested IT8689E-capable DKMS driver:
 
    ```bash
-   sudo modprobe it87
+   sudo ./install-it87.sh
    for h in /sys/class/hwmon/hwmon*; do
      [ "$(cat "$h/name" 2>/dev/null)" = it8689 ] && echo "$h"
    done
    ```
 
-   Ubuntu 26.04 kernel `7.0.0-30-generic` on the reference machine provides a
-   signed in-tree driver that detects IT8689E correctly.  Do not replace that
-   working module with an external DKMS build.  Only if the running kernel does
-   not provide a working IT8689E path, install the tested fallback:
-
-   ```bash
-   sudo ./install-it87.sh
-   sudo modprobe it87
-   ```
-
-   This pins `frankcrawford/it87` commit
+   The Ubuntu 26.04 kernel `7.0.0-30-generic` in-tree module returns `No such
+   device` on the reference Gigabyte board.  The installer therefore pins
+   `frankcrawford/it87` commit
    `c567739c639533177abd66894a6a8d561337285f`.  No unsafe `force_id`,
-   `ignore_resource_conflict`, or polarity option is used.
+   `ignore_resource_conflict`, or polarity option is used.  A successful probe
+   reports `Found IT8689E chip at 0xa40` with the Gigabyte MMIO path.  DKMS
+   rebuilds the module for subsequently installed kernels.
 
 3. Follow [the fan bring-up procedure](docs/FAN-BRINGUP.md), then populate and
    explicitly enable `/etc/pc-power/fans.conf`.
@@ -90,6 +91,23 @@ dry-run, active tests, and fault-injection tests.
 The service defaults to the BALANCED fan curve whenever the volatile
 `/run/pc-power/fan-profile` file does not exist after boot.  It does not apply a
 CPU/GPU/Linux profile at boot.
+
+## Optional SILENT profile at boot
+
+After fan commissioning and `pc-fand.service` activation, install and enable
+the one-shot boot unit:
+
+```bash
+sudo install -m 0755 scripts/pc-power-silent-at-boot /usr/local/libexec/
+sudo install -m 0644 systemd/pc-power-silent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pc-power-silent.service
+```
+
+The unit waits up to 120 seconds for fresh, warning-free CPU/GPU sensor data,
+an active `write-pwm` fan controller, and all three power-control interfaces.
+It then applies `pc-power silent` once.  A failed readiness check leaves the
+unit failed and does not bypass `pc-power`'s partial-switch protection.
 
 ## Fan controller
 

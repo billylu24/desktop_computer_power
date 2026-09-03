@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Wait for all fan and power-control inputs, then apply SILENT once per boot.
+set -euo pipefail
+
+readonly PC_POWER=/usr/local/sbin/pc-power
+readonly CPU_POWER=/usr/local/sbin/cpu-power
+readonly NVIDIA_SMI=/usr/bin/nvidia-smi
+readonly POWERPROFILESCTL=/usr/bin/powerprofilesctl
+readonly FAN_STATUS=/run/pc-power/fan-status.json
+readonly READY_TIMEOUT=120
+
+fan_controller_ready() {
+  /usr/bin/python3 - "$FAN_STATUS" <<'PY'
+import json
+import sys
+import time
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        status = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(1)
+
+sensors = status.get("sensors_c", {})
+required = ("cpu_tctl", "gpu_core", "gpu_junction", "gpu_vram")
+fresh = 0 <= time.time() - float(status.get("timestamp", 0)) <= 10
+healthy = (
+    fresh
+    and status.get("mode") == "write-pwm"
+    and not status.get("warnings")
+    and all(sensors.get(name) is not None for name in required)
+)
+raise SystemExit(0 if healthy else 1)
+PY
+}
+
+for ((second = 0; second < READY_TIMEOUT; second++)); do
+  if /usr/bin/systemctl is-active --quiet pc-fand.service \
+    && fan_controller_ready \
+    && "$CPU_POWER" status >/dev/null 2>&1 \
+    && "$NVIDIA_SMI" --query-gpu=power.limit --format=csv,noheader,nounits >/dev/null 2>&1 \
+    && "$POWERPROFILESCTL" get >/dev/null 2>&1; then
+    exec "$PC_POWER" silent
+  fi
+  sleep 1
+done
+
+printf '%s\n' "pc-power-silent-at-boot: controls were not ready after ${READY_TIMEOUT}s" >&2
+exit 1

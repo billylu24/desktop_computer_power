@@ -1,6 +1,5 @@
 [Unit]
 Description=Multi-sensor CPU, lower, and upper fan controller
-After=multi-user.target
 
 [Service]
 Type=simple

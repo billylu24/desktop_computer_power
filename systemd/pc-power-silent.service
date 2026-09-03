@@ -1,0 +1,15 @@
+[Unit]
+Description=Apply the SILENT whole-PC profile at boot
+Requires=pc-fand.service
+After=pc-fand.service power-profiles-daemon.service
+Wants=power-profiles-daemon.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/sbin/modprobe ryzen_smu
+ExecStart=/usr/local/libexec/pc-power-silent-at-boot
+RemainAfterExit=yes
+TimeoutStartSec=150
+
+[Install]
+WantedBy=multi-user.target
